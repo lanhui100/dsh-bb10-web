@@ -1,0 +1,23 @@
+services:
+  dsh-q20-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dsh-q20-web:latest
+    container_name: dsh-q20-web
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3090}:3090"
+    environment:
+      - PORT=3090
+      - HOST=0.0.0.0
+      - DSH_WEB_URL=${DSH_WEB_URL:-http://host.docker.internal:3080}
+      - DSH_HOME=/root/.dsh
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
+      - Q20_AUTH_TOKEN=${Q20_AUTH_TOKEN:-}
+      - Q20_COOKIE_SECURE=${Q20_COOKIE_SECURE:-0}
+    volumes:
+      # Decoupled DSH home directory mount for session transcripts and profile configs
+      - ${DSH_HOME:-~/.dsh}:/root/.dsh:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

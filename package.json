@@ -1,0 +1,20 @@
+{
+  "name": "dsh-q20-web",
+  "version": "1.0.0",
+  "description": "Lightweight companion web service tailored for BlackBerry Q20 and legacy mobile browsers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "./start.sh",
+    "stop": "./stop.sh",
+    "test": "node test-decoupling.mjs && node test-unit.mjs",
+    "test:decouple": "node test-decoupling.mjs",
+    "test:fold": "node test-fold-smoke.cjs",
+    "test:preview": "node test-preview-browser.mjs",
+    "test:live": "node test-suite.mjs",
+    "test:all": "node test-decoupling.mjs && node test-unit.mjs && node test-fold-smoke.cjs && node test-suite.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.61.1"
+  }
+}

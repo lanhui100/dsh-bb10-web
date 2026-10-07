@@ -1,0 +1,30 @@
+#!/bin/sh
+# pre-push: full sensitive-content gate + mandatory test suite before any push.
+#
+# Runs:
+#   1. [secret-scan --all]  decoupling/credential scan over the whole tracked tree
+#   2. [npm run test]       decoupling contract + unit gates (must be 100% green)
+#
+# Skip with:  git push --no-verify   (explicitly documented escape hatch)
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+if [ -f scripts/secret-scan.mjs ]; then
+  node scripts/secret-scan.mjs --all || {
+    echo "[pre-push] BLOCKED: secret/decoupling violations detected. Run 'node scripts/secret-scan.mjs --all' locally." >&2
+    exit 1
+  }
+else
+  echo "[pre-push] secret-scan.mjs not present, skipping scan"
+fi
+
+if [ -f package.json ]; then
+  npm run test >/dev/null 2>&1 || {
+    echo "[pre-push] BLOCKED: 'npm run test' failed (decoupling + unit gates must be green)." >&2
+    exit 1
+  }
+  echo "[pre-push] gates: secret-scan clean, npm test green"
+else
+  echo "[pre-push] package.json not present, skipping test gate"
+fi
+
+exit 0

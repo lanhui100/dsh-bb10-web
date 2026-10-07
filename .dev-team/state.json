@@ -1,0 +1,15 @@
+{
+  "waves": [
+    {
+      "wave": 1,
+      "branch": "q20-docker",
+      "tasks": ["task-1", "task-2", "task-3"],
+      "baseline_commit": "558fa2f",
+      "red_commit": "659027f",
+      "green_commit": "8aa0a15",
+      "status": "completed",
+      "quarantine": null,
+      "nfr_degraded": []
+    }
+  ]
+}

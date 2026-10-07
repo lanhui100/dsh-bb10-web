@@ -1,0 +1,11 @@
+#!/bin/sh
+# pre-commit: run secret scan on staged changes (fast path)
+cd "$(git rev-parse --show-toplevel)" || exit 1
+# Only scan when the scan script is tracked (bootstrap guard for first commit)
+[ -f scripts/secret-scan.mjs ] || { echo "[hook] secret-scan.mjs not present, skipping"; exit 0; }
+node scripts/secret-scan.mjs
+status=$?
+if [ $status -ne 0 ]; then
+  echo "[pre-commit] BLOCKED: sensitive-content/decoupling violations found (see above). Fix before committing." >&2
+fi
+exit $status
