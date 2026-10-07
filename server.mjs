@@ -4841,7 +4841,7 @@ const server = http.createServer((req, res) => {
     // 须位于安全网关拦截器之前：Traefik/主机看门狗/人工探活无登录 Cookie 亦
     // 无 BB10 UA；`/` 会被 UA 门拦截、`api/*` 需鉴权，均不适合做存活探针。
     if (pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
-      const body = JSON.stringify({ ok: true, service: 'dsh-q20-web', uptime: Math.floor(process.uptime()) });
+      const body = JSON.stringify({ ok: true, service: 'dsh-bb10-web', uptime: Math.floor(process.uptime()) });
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         ...SECURITY_HEADERS,
@@ -6360,7 +6360,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
   const isLoopbackBind = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
   server.on('error', (err) => {
     if (err && err.code === 'EADDRINUSE') {
-      console.error(`[FATAL] 端口 ${PORT} 已被占用，启动中止。先执行 ./stop.sh 清理残留（若由 systemd 托管则先 sudo systemctl stop dsh-q20-web），再重新启动。`);
+      console.error(`[FATAL] 端口 ${PORT} 已被占用，启动中止。先执行 ./stop.sh 清理残留（若由 systemd 托管则先 sudo systemctl stop dsh-bb10-web），再重新启动。`);
       console.error(`[FATAL] 若占用者仅监听 127.0.0.1: 回环占坑期间公网入口持续 502，务必确认存活进程绑定 0.0.0.0。`);
     } else {
       console.error(`[FATAL] listen 失败: ${err && err.message}`);

@@ -1,5 +1,5 @@
 [Unit]
-Description=DSH Q20 Web Companion Service
+Description=DSH BB10 Web Companion Service
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -8,14 +8,14 @@ StartLimitBurst=10
 [Service]
 Type=simple
 User=%I
-WorkingDirectory=/opt/dsh-q20-web
-EnvironmentFile=-/etc/default/dsh-q20-web
+WorkingDirectory=/opt/dsh-bb10-web
+EnvironmentFile=-/etc/default/dsh-bb10-web
 ExecStart=/usr/bin/node server.mjs
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=dsh-q20-web
+SyslogIdentifier=dsh-bb10-web
 
 [Install]
 WantedBy=multi-user.target

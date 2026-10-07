@@ -1,5 +1,5 @@
 /**
- * Fast Local Unit & Contract Test Suite for Q20 Web Companion (port 3090)
+ * Fast Local Unit & Contract Test Suite for BB10 Web Companion (port 3090)
  *
  * Characteristics:
  * - 0 External LLM model calls
@@ -2333,7 +2333,7 @@ async function main() {
       if (resHealth.status !== 200 || !resHealth.body || resHealth.body.ok !== true) {
         throw new Error(`Expected 200 { ok: true } from /healthz, got ${resHealth.status}: ${resHealth.rawText.slice(0, 120)}`);
       }
-      if (resHealth.body.service !== 'dsh-q20-web' || typeof resHealth.body.uptime !== 'number') {
+      if (resHealth.body.service !== 'dsh-bb10-web' || typeof resHealth.body.uptime !== 'number') {
         throw new Error(`Unexpected /healthz payload: ${resHealth.rawText.slice(0, 160)}`);
       }
       if (String(resHealth.headers['cache-control'] || '').indexOf('no-store') < 0) {
@@ -2356,7 +2356,7 @@ async function main() {
       if (probeIdx < 0 || gatewayIdx < 0 || probeIdx > gatewayIdx) {
         throw new Error('/healthz must be registered before the Security Gateway Interceptor');
       }
-      for (const needle of ['EADDRINUSE', '[BIND] WARN', 'stop dsh-q20-web']) {
+      for (const needle of ['EADDRINUSE', '[BIND] WARN', 'stop dsh-bb10-web']) {
         if (serverSrc.indexOf(needle) < 0) throw new Error(`listen guard missing in server.mjs: ${needle}`);
       }
 

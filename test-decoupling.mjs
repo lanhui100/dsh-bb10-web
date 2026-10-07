@@ -1,5 +1,5 @@
 /**
- * Decoupling Charter Gate for dsh-q20-web
+ * Decoupling Charter Gate for dsh-bb10-web
  *
  * Machine-checkable promises from the constitution (root AGENTS.md §六 item 0,
  * "消费边界与解耦声明 / Decoupled Consumer"; ADR: .agents/notes/implemented/

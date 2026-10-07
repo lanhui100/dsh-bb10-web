@@ -1,6 +1,6 @@
-# AGENTS.md — BlackBerry Q20 (BB10 WebKit) 项目宪法与架构准则
+# AGENTS.md — BlackBerry 10 (BB10 WebKit) 项目宪法与架构准则
 
-本文档是本仓库（`dsh-q20-web`）的**最高开发宪法**。任何后续的功能扩展、性能优化、界面调整或重构工作，**必须 100% 严格遵守本文档所规定的硬件与浏览器客观约束**。严禁以“现代开发便利”为由引入任何破坏 BlackBerry Q20 浏览器可访问性的语法或特性。
+本文档是本仓库（`dsh-bb10-web`）的**最高开发宪法**。任何后续的功能扩展、性能优化、界面调整或重构工作，**必须 100% 严格遵守本文档所规定的硬件与浏览器客观约束**。严禁以“现代开发便利”为由引入任何破坏 BlackBerry 10 (BB10) 浏览器可访问性的语法或特性。
 
 ---
 
@@ -111,7 +111,7 @@
    - **存储与凭据镜像豁免**：历史会话转录读取（`~/.dsh/sessions` 下 Zstd 解压）、宿主离线时 `~/.dsh/storages/workspace.json` 的原子直写镜像、以及读取用户层配置文档（dsh ≥ 0.1.7 为 `~/.dsh/profiles/<profile>/cordis.patch.yml`；旧版为 `~/.dsh/settings.yaml`）与 `.credentials.yaml` 派生宿主认证 Cookie，属于官方格式的持久化镜像适配，均受同等上游格式对齐义务约束；该镜像只作管道②降级兜底，**模型、工作区等可路由数据在线时一律以宿主 RPC 为准**（配置格式随上游迁移，见 `.agents/notes/implemented/bug-fix/2026-09-23-model-catalog-source-after-dsh-017-profile-config.md`）；
    - **上游对齐义务**：dsh 处于预发布阶段，允许破坏性更新；dsh 每次破坏性更新落地，本工程必须在同一次变更内完成对齐调整并全量回归（`test-suite.mjs` 全量 PASS），保证持续正确消费 dsh 服务。
 
-本项目虽然受限于 BlackBerry Q20 物理硬件（小方屏、双核 CPU、2GB RAM）及老旧 WebKit 537.35 内核，在**前端展示层（CSS 布局、ES5 语法、DOM 节流、紧凑折叠）**必须严格做环境可行性适配，但在**底层业务与核心处理逻辑**上，必须与官方 `dsh web` 保持高度对齐：
+本项目虽然受限于 BlackBerry 10 设备（以 Q20 为代表）物理硬件（小方屏、双核 CPU、2GB RAM）及老旧 WebKit 537.35 内核，在**前端展示层（CSS 布局、ES5 语法、DOM 节流、紧凑折叠）**必须严格做环境可行性适配，但在**底层业务与核心处理逻辑**上，必须与官方 `dsh web` 保持高度对齐：
 
 1. **状态管理语义对齐**：
    - 会话状态机（`idle` / `running` / `stopped` / `done` / `error`）必须与 `dsh web`（如 `SessionSnapshot`、`StateDot` 及 session controller 规范）保持同构；

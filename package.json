@@ -1,7 +1,7 @@
 {
-  "name": "dsh-q20-web",
+  "name": "dsh-bb10-web",
   "version": "1.0.0",
-  "description": "Lightweight companion web service tailored for BlackBerry Q20 and legacy mobile browsers",
+  "description": "Lightweight companion web service tailored for BlackBerry 10 (BB10) and legacy mobile browsers",
   "private": true,
   "type": "module",
   "scripts": {

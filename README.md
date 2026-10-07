@@ -1,14 +1,14 @@
-# DSH BlackBerry Q20 Lightweight Web Client
+# DSH BlackBerry 10 Lightweight Web Client
 
 English | [简体中文](README.zh.md)
 
-A dedicated, lightweight Web client and companion service tailored for **BlackBerry Classic (Q20)** and legacy mobile browsers, powered by DeepSeek Harness (DSH).
+A dedicated, lightweight Web client and companion service tailored for the **BlackBerry 10 (BB10)** built-in browser and legacy mobile browsers, powered by DeepSeek Harness (DSH).
 
 ---
 
 ## Key Features
 
-1. **Tailored for BlackBerry Q20**:
+1. **Tailored for BlackBerry 10 (BB10) browsers**:
    - **Strict ES5 & Classic CSS**: Zero modern framework overhead, 100% compatible with BlackBerry 10 OS native WebKit browser.
    - **720×720 Square Screen Layout**: Single-row collapsible top bar (height 32px), maximizing vertical reading space.
    - **Physical Full Keyboard Navigation**:
@@ -88,7 +88,7 @@ docker compose logs -f
 
 > **Copy-paste prompt for an AI agent** (paste into any agent chat to auto-provision this service):
 > ```text
-> 请在此仓库根目录执行以下操作，一键拉起 dsh-q20-web 服务：
+> 请在此仓库根目录执行以下操作，一键拉起 dsh-bb10-web 服务：
 > 1) 若不存在 .env，执行 `cp .env.example .env`；按需修改 .env 中的
 >    DSH_WEB_URL（上游 DeepSeek Harness Web 地址，Docker 内默认
 >    http://host.docker.internal:3080）、ALLOWED_ORIGINS（反代域名）、
@@ -123,12 +123,12 @@ pnpm run test:live # or node test-suite.mjs
 pnpm run test:preview
 ```
 
-Open `http://127.0.0.1:3090` in BlackBerry Q20 browser to start chatting!
+Open `http://127.0.0.1:3090` in the BlackBerry 10 (BB10) browser to start chatting!
 
 ---
 
 ## Production & Availability
 
-- **Systemd supervision**: use the generic template in `deploy/dsh-q20-web.service` (requires `/etc/default/dsh-q20-web` env file; set `DSH_WEB_URL`, `DSH_ROOT`, etc. there). Enable with `sudo cp deploy/dsh-q20-web.service /etc/systemd/system/ && sudo systemctl enable --now dsh-q20-web`.
+- **Systemd supervision**: use the generic template in `deploy/dsh-bb10-web.service` (requires `/etc/default/dsh-bb10-web` env file; set `DSH_WEB_URL`, `DSH_ROOT`, etc. there). Enable with `sudo cp deploy/dsh-bb10-web.service /etc/systemd/system/ && sudo systemctl enable --now dsh-bb10-web`.
 - **Liveness probe**: `curl --noproxy '*' http://127.0.0.1:3090/healthz` → `{ ok: true }` (unauthenticated, UA-agnostic; must sit before the auth/UA gateway).
-- **Triage entry**: `journalctl -u dsh-q20-web` (`[FATAL]`/`[BIND]` lines); loopback-only bind ⇒ public Ingress 502.
+- **Triage entry**: `journalctl -u dsh-bb10-web` (`[FATAL]`/`[BIND]` lines); loopback-only bind ⇒ public Ingress 502.

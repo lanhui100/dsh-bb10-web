@@ -5,8 +5,8 @@
 ## 槽位（实例化时填写）
 | 槽位 | 应填内容 |
 |---|---|
-| 项目名 | dsh-q20-web |
-| 一句话定位 | 专为 BlackBerry Q20 (BB10 WebKit) 及老旧移动端量身打造的超轻量 DSH Web 客户端与伴生服务 |
+| 项目名 | dsh-bb10-web |
+| 一句话定位 | 专为 BlackBerry 10 (BB10 WebKit) 及老旧移动端量身打造的超轻量 DSH Web 客户端与伴生服务 |
 | 技术栈 | Node.js (ES Module) + 原生 ES5 / Classic CSS + DSH CLI / API 伴生对接 |
 | 成熟度目标 | L2 |
 

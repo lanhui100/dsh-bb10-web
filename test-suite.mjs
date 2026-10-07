@@ -1,5 +1,5 @@
 /**
- * Automated End-to-End Test Suite for Q20 Web Server (port 3090)
+ * Automated End-to-End Test Suite for BB10 Web Server (port 3090)
  *
  * 2026-09-30 变更（真链路测试改 mock，见 .agents/notes/implemented/testing/…）：
  *   默认以 Q20_MOCK_HOST=1 高隔离 mock 宿主运行 —— 不触碰真实 DSH Web (3080)、
@@ -474,7 +474,7 @@ async function main() {
 
       // 回归护栏：工作区面板计数(sessionCount)不得高于 /api/sessions 实际列表长度。
       // 2026-09-18 修复前官方工作区直接取 workspace.json 注册数减归档数，残留 id 使计数虚高
-      // （dsh-q20-web 显示 33 实际 3）。修复后两者恒一致；并发建会话只会造成 count < list，
+      // （dsh-bb10-web 显示 33 实际 3）。修复后两者恒一致；并发建会话只会造成 count < list，
       // 重试几次吸收；count > list 即回归。
       const currentWs = data.workspaces.find((w) => w.cwd === hostCurrentCwd);
       if (currentWs && typeof currentWs.sessionCount === 'number') {

@@ -1,10 +1,10 @@
 services:
-  dsh-q20-web:
+  dsh-bb10-web:
     build:
       context: .
       dockerfile: Dockerfile
-    image: dsh-q20-web:latest
-    container_name: dsh-q20-web
+    image: dsh-bb10-web:latest
+    container_name: dsh-bb10-web
     restart: unless-stopped
     ports:
       - "${PORT:-3090}:3090"

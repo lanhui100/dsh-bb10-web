@@ -21,7 +21,7 @@
 - `Q20_MOCK_HOST=1 node test-suite.mjs` → 7/7 PASS
 - `node test-fold-smoke.cjs` → SMOKE ALL PASS (41)
 - `bash .agents/skills/write-adr/verify-note.sh` → 全部通过
-- 生产零影响: `systemctl is-active dsh-q20-web` = active；`/healthz` = 200；PID 548104 持续运行；生产 systemd 文件零改动
+- 生产零影响: `systemctl is-active dsh-bb10-web` = active；`/healthz` = 200；PID 548104 持续运行；生产 systemd 文件零改动（dsh-q20-web 为历史单元名）
 
 ## 结论
 

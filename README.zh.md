@@ -1,8 +1,8 @@
-# DSH BlackBerry Q20 Lightweight Web Client
+# DSH BlackBerry 10 Lightweight Web Client
 
 [English](README.md) | 简体中文
 
-专门为 **BlackBerry Classic (Q20)** 等老旧移动浏览器量身定制的 DeepSeek Harness (DSH) 极简 Web 客户端与伴侣服务。
+专门为 **BlackBerry 10 (BB10)** 系统自带浏览器及老旧移动浏览器量身定制的 DeepSeek Harness (DSH) 极简 Web 客户端与伴侣服务。
 
 ---
 
@@ -88,7 +88,7 @@ docker compose logs -f
 
 > **可复制给 AI Agent 的一键拉起 Prompt**（粘贴给任意 agent 聊天即可自动部署本服务）：
 > ```text
-> 请在此仓库根目录执行以下操作，一键拉起 dsh-q20-web 服务：
+> 请在此仓库根目录执行以下操作，一键拉起 dsh-bb10-web 服务：
 > 1) 若不存在 .env，执行 `cp .env.example .env`；按需修改 .env 中的
 >    DSH_WEB_URL（上游 DeepSeek Harness Web 地址，Docker 内默认
 >    http://host.docker.internal:3080）、ALLOWED_ORIGINS（反代域名）、
@@ -123,12 +123,12 @@ pnpm run test:live # 或 node test-suite.mjs
 pnpm run test:preview
 ```
 
-在 BlackBerry Q20 浏览器输入：`http://127.0.0.1:3090`（已配置 SSH 隧道）即可畅快使用！
+在 BlackBerry 10 (BB10) 浏览器输入：`http://127.0.0.1:3090`（已配置 SSH 隧道）即可畅快使用！
 
 ---
 
 ## 生产托管与可用性
 
-- **systemd 托管**：使用 `deploy/dsh-q20-web.service` 通用模板（需 `/etc/default/dsh-q20-web` 环境文件，在其中配置 `DSH_WEB_URL`、`DSH_ROOT` 等）。安装：`sudo cp deploy/dsh-q20-web.service /etc/systemd/system/ && sudo systemctl enable --now dsh-q20-web`。
+- **systemd 托管**：使用 `deploy/dsh-bb10-web.service` 通用模板（需 `/etc/default/dsh-bb10-web` 环境文件，在其中配置 `DSH_WEB_URL`、`DSH_ROOT` 等）。安装：`sudo cp deploy/dsh-bb10-web.service /etc/systemd/system/ && sudo systemctl enable --now dsh-bb10-web`。
 - **探活**：`curl --noproxy '*' http://127.0.0.1:3090/healthz` → `{ ok: true }`（免鉴权、UA 无关，位于鉴权/UA 网关之前）。
-- **排障入口**：`journalctl -u dsh-q20-web`（看 `[FATAL]`/`[BIND]` 行）；仅回环监听 ⇒ 公网 Ingress 502。
+- **排障入口**：`journalctl -u dsh-bb10-web`（看 `[FATAL]`/`[BIND]` 行）；仅回环监听 ⇒ 公网 Ingress 502。

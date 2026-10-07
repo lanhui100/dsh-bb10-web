@@ -13,7 +13,7 @@ LOG_FILE="$DIR/server.log"
 if [ -f "$PID_FILE" ]; then
   OLD_PID=$(cat "$PID_FILE")
   if ps -p "$OLD_PID" > /dev/null 2>&1; then
-    echo "DSH Q20 Web service is already running (PID: $OLD_PID) at http://$HOST:$PORT"
+    echo "DSH BB10 Web service is already running (PID: $OLD_PID) at http://$HOST:$PORT"
     exit 0
   fi
   rm -f "$PID_FILE"
@@ -24,7 +24,7 @@ fi
 if ss -tln 2>/dev/null | grep -qE "[:.]${PORT}($| )"; then
   echo "Error: port ${PORT} already has a listener (ss -tln). Refusing to start a second instance."
   echo "  Diagnose: ss -tlnp | grep ${PORT}"
-  echo "  Cleanup:  ./stop.sh (or: sudo systemctl stop dsh-q20-web)"
+  echo "  Cleanup:  ./stop.sh (or: sudo systemctl stop dsh-bb10-web)"
   exit 1
 fi
 
@@ -34,7 +34,7 @@ if [ ! -d "$DSH_ROOT" ]; then
   exit 1
 fi
 
-echo "Starting DSH Q20 Web service..."
+echo "Starting DSH BB10 Web service..."
 echo "  DSH_ROOT: $DSH_ROOT"
 echo "  URL:      http://$HOST:$PORT"
 echo "  Log:      $LOG_FILE"
@@ -49,7 +49,7 @@ echo "$NEW_PID" > "$PID_FILE"
 
 sleep 1
 if ps -p "$NEW_PID" > /dev/null 2>&1; then
-  echo "DSH Q20 Web service started successfully! (PID: $NEW_PID)"
+  echo "DSH BB10 Web service started successfully! (PID: $NEW_PID)"
 else
   echo "Error: Failed to start service. Check $LOG_FILE for details:"
   tail -n 20 "$LOG_FILE"
