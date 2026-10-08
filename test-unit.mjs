@@ -1668,7 +1668,7 @@ async function main() {
 
     // 4. Bootstrap API Schema & Regression Guardrail
     await runner.run('Bootstrap API Contract & Panel Count Consistency', async () => {
-      const res = await httpRequest('/api/bootstrap');
+      const res = await httpRequest('/api/bootstrap', { timeout: 30000 });
       if (res.status !== 200) {
         throw new Error(`Expected HTTP 200, got ${res.status}`);
       }
@@ -1692,7 +1692,7 @@ async function main() {
       const currentCwd = data.current?.workspaceCwd || process.cwd();
       const currentWs = data.workspaces.find((w) => w.cwd === currentCwd);
       if (currentWs && typeof currentWs.sessionCount === 'number') {
-        const listRes = await httpRequest(`/api/sessions?cwd=${encodeURIComponent(currentCwd)}`);
+        const listRes = await httpRequest(`/api/sessions?cwd=${encodeURIComponent(currentCwd)}`, { timeout: 30000 });
         if (listRes.status !== 200) {
           throw new Error(`Failed to query /api/sessions: HTTP ${listRes.status}`);
         }
@@ -2945,6 +2945,16 @@ async function main() {
         throw new Error('Expected dshAlive boolean in /api/bootstrap response');
       }
 
+      // 2.1) Cache-Control header anti-staleness contract
+      const bootCc = bootRes.headers?.['cache-control'] || '';
+      if (!bootCc.includes('no-store') && !bootCc.includes('no-cache')) {
+        throw new Error(`Expected Cache-Control: no-cache/no-store on /api/bootstrap, got "${bootCc}"`);
+      }
+      const dshCc = dshStatusRes.headers?.['cache-control'] || '';
+      if (!dshCc.includes('no-store') && !dshCc.includes('no-cache')) {
+        throw new Error(`Expected Cache-Control: no-cache/no-store on /api/dsh/status, got "${dshCc}"`);
+      }
+
       // 3) static assets & CSS validation
       if (!fs.existsSync(path.join(__dirname, 'static', 'error-whale-tail.svg'))) {
         throw new Error('Missing static/error-whale-tail.svg asset');
@@ -2962,6 +2972,19 @@ async function main() {
       }
       if (!html.includes('/api/dsh/status')) {
         throw new Error('Missing /api/dsh/status polling in static/index.html');
+      }
+
+      // 4) DSH status polling must not be blocked by !curCwd (init/welcome screen self-healing)
+      // Extract the setInterval polling block
+      const pollBlockMatch = html.match(/setInterval\(function\(\)\s*\{([\s\S]*?)\},\s*5000\);/);
+      if (!pollBlockMatch) {
+        throw new Error('Missing 5000ms polling setInterval in static/index.html');
+      }
+      const pollBlock = pollBlockMatch[1];
+      const dshStatusIdx = pollBlock.indexOf("'/api/dsh/status'");
+      const earlyReturnCwdIdx = pollBlock.indexOf('if (!curCwd) return;');
+      if (earlyReturnCwdIdx !== -1 && dshStatusIdx !== -1 && earlyReturnCwdIdx < dshStatusIdx) {
+        throw new Error('DSH alive polling is trapped behind "if (!curCwd) return;", preventing self-healing on welcome screen');
       }
 
       return {

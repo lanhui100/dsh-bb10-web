@@ -12986,25 +12986,26 @@
     setInterval(function() {
       if (!isAuthOk) return; // 未认证通过时严禁后台轮询，防止 401 死循环
       var curCwd = getCwd();
-      if (!curCwd) return;
-      if (!sessLoading[curCwd]) {
-        loadSessions(curCwd);
-      }
-      for (var sid in knownSessionsMap) {
-        if (knownSessionsMap.hasOwnProperty(sid)) {
-          var entry = knownSessionsMap[sid];
-          if (entry && entry.isRunning && entry.cwd && entry.cwd !== curCwd) {
-            if (!sessLoading[entry.cwd]) {
-              loadSessions(entry.cwd);
+      if (curCwd) {
+        if (!sessLoading[curCwd]) {
+          loadSessions(curCwd);
+        }
+        for (var sid in knownSessionsMap) {
+          if (knownSessionsMap.hasOwnProperty(sid)) {
+            var entry = knownSessionsMap[sid];
+            if (entry && entry.isRunning && entry.cwd && entry.cwd !== curCwd) {
+              if (!sessLoading[entry.cwd]) {
+                loadSessions(entry.cwd);
+              }
             }
           }
         }
+        // W 面板聚合图标时效性：轮换刷新一个含在跑会话的已缓存工作区（每次最多 1 个 cwd），
+        // loadSessions 归来分支在 isWsOpen 时自动重绘头部图标
+        try { if (typeof refreshStaleWorkspaceSessions === 'function') refreshStaleWorkspaceSessions(); } catch (e) {}
       }
-      // W 面板聚合图标时效性：轮换刷新一个含在跑会话的已缓存工作区（每次最多 1 个 cwd），
-      // loadSessions 归来分支在 isWsOpen 时自动重绘头部图标
-      try { if (typeof refreshStaleWorkspaceSessions === 'function') refreshStaleWorkspaceSessions(); } catch (e) {}
 
-      // 定期探测 DSH 底座进程健康状况（每 10s 一次）
+      // 定期探测 DSH 底座进程健康状况（每 10s 一次，不受 curCwd 为空影响，确保欢迎页/未选工作区时故障自愈）
       dshPollCounter++;
       if (dshPollCounter % 2 === 0) {
         var dXhr = new XMLHttpRequest();

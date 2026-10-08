@@ -760,7 +760,8 @@ const DSH_HOST_ALIVE_TTL_MS = 5000;
 
 /**
  * 权威检测 DSH 官方 Web 底座进程（3080）是否存活在线。
- * 在 Q20_MOCK_HOST 模式下直接判定存活；在线模式下采用 1.5s 短超时探活，带 5s 缓存与 In-flight 单飞。
+ * 在 Q20_MOCK_HOST 模式下直接判定存活；在线模式下采用 2.5s 超时探活（带 1 次快速重试以滤除瞬态毛刺），
+ * 并带 5s 缓存与 In-flight 单飞。
  */
 async function checkDshHostAlive(force = false) {
   if (Q20_MOCK_HOST) return true;
@@ -771,47 +772,58 @@ async function checkDshHostAlive(force = false) {
   if (dshHostAliveInflight) {
     return dshHostAliveInflight;
   }
-  dshHostAliveInflight = new Promise((resolve) => {
-    try {
-      const url = new URL(DSH_WEB_URL);
-      const authority = url.host;
-      const cookie = getDshWebAuthCookie(authority);
-      const headers = {
-        'Host': authority,
-        'Origin': url.origin,
-      };
-      if (cookie) headers['Cookie'] = cookie;
-      const clientReq = http.request(
-        url,
-        {
-          method: 'GET',
-          headers,
-          timeout: 1500,
-        },
-        (res) => {
-          res.resume();
-          const alive = res.statusCode !== 502 && res.statusCode !== 503;
-          dshHostAliveCache = { alive, at: Date.now() };
-          resolve(alive);
-        }
-      );
-      clientReq.on('error', () => {
-        dshHostAliveCache = { alive: false, at: Date.now() };
+
+  function probeOnce() {
+    return new Promise((resolve) => {
+      try {
+        const url = new URL(DSH_WEB_URL);
+        const authority = url.host;
+        const cookie = getDshWebAuthCookie(authority);
+        const headers = {
+          'Host': authority,
+          'Origin': url.origin,
+        };
+        if (cookie) headers['Cookie'] = cookie;
+        const clientReq = http.request(
+          url,
+          {
+            method: 'GET',
+            headers,
+            timeout: 2500,
+          },
+          (res) => {
+            res.resume();
+            const alive = res.statusCode !== 502 && res.statusCode !== 503;
+            resolve(alive);
+          }
+        );
+        clientReq.on('error', () => {
+          resolve(false);
+        });
+        clientReq.on('timeout', () => {
+          clientReq.destroy();
+          resolve(false);
+        });
+        clientReq.end();
+      } catch {
         resolve(false);
-      });
-      clientReq.on('timeout', () => {
-        clientReq.destroy();
-        dshHostAliveCache = { alive: false, at: Date.now() };
-        resolve(false);
-      });
-      clientReq.end();
-    } catch {
-      dshHostAliveCache = { alive: false, at: Date.now() };
-      resolve(false);
+      }
+    });
+  }
+
+  dshHostAliveInflight = (async () => {
+    let alive = await probeOnce();
+    if (!alive) {
+      // 快速延迟 100ms 二次确认，滤除因 GC 或瞬态网络抖动引起的误报
+      await new Promise((r) => setTimeout(r, 100));
+      alive = await probeOnce();
     }
-  }).finally(() => {
+    dshHostAliveCache = { alive, at: Date.now() };
+    return alive;
+  })().finally(() => {
     dshHostAliveInflight = null;
   });
+
   return dshHostAliveInflight;
 }
 
@@ -4473,11 +4485,14 @@ function clientAcceptsGzip(req) {
     return false;
   }
 }
-function sendJsonGzipAware(res, statusCode, bodyStr, req) {
+function sendJsonGzipAware(res, statusCode, bodyStr, req, extraHeaders = {}) {
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
     ...SECURITY_HEADERS,
     ...getCorsHeaders(req),
+    ...extraHeaders,
   };
   let payload = bodyStr;
   if (clientAcceptsGzip(req) && Buffer.byteLength(bodyStr, 'utf8') >= GZIP_MIN_BYTES) {
@@ -4492,9 +4507,9 @@ function sendJsonGzipAware(res, statusCode, bodyStr, req) {
   res.end(payload);
 }
 
-function sendJson(res, statusCode, data, req = null) {
+function sendJson(res, statusCode, data, req = null, extraHeaders = {}) {
   const requestObj = req || res.req;
-  sendJsonGzipAware(res, statusCode, JSON.stringify(data), requestObj);
+  sendJsonGzipAware(res, statusCode, JSON.stringify(data), requestObj, extraHeaders);
 }
 
 // P0 降载：静态资源弱 ETag（size-mtime 指纹）
