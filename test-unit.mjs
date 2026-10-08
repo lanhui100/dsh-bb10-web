@@ -2928,6 +2928,50 @@ async function main() {
       };
     });
 
+    // 16. DSH Process Down / Crash Indicator Contract
+    await runner.run('DSH Process Down / Crash Indicator Contract', async () => {
+      // 1) /api/dsh/status endpoint works
+      const dshStatusRes = await httpRequest('/api/dsh/status');
+      if (dshStatusRes.status !== 200 || dshStatusRes.body?.ok !== true) {
+        throw new Error(`Expected HTTP 200 with ok:true from /api/dsh/status, got ${dshStatusRes.status}`);
+      }
+      if (typeof dshStatusRes.body?.dshAlive !== 'boolean') {
+        throw new Error('Expected dshAlive boolean in /api/dsh/status response');
+      }
+
+      // 2) /api/bootstrap contains dshAlive
+      const bootRes = await httpRequest('/api/bootstrap');
+      if (bootRes.status !== 200 || typeof bootRes.body?.dshAlive !== 'boolean') {
+        throw new Error('Expected dshAlive boolean in /api/bootstrap response');
+      }
+
+      // 3) static assets & CSS validation
+      if (!fs.existsSync(path.join(__dirname, 'static', 'error-whale-tail.svg'))) {
+        throw new Error('Missing static/error-whale-tail.svg asset');
+      }
+
+      const html = fs.readFileSync(path.join(__dirname, 'static', 'index.html'), 'utf8');
+      if (!html.includes('welcome-spinner-error')) {
+        throw new Error('Missing welcome-spinner-error class in static/index.html');
+      }
+      if (!html.includes('error-whale-tail.svg')) {
+        throw new Error('Missing error-whale-tail.svg reference in static/index.html');
+      }
+      if (!html.includes('function setDshAliveState(')) {
+        throw new Error('Missing setDshAliveState declaration in static/index.html');
+      }
+      if (!html.includes('/api/dsh/status')) {
+        throw new Error('Missing /api/dsh/status polling in static/index.html');
+      }
+
+      return {
+        dshStatusEndpoint: true,
+        dshAliveInBootstrap: true,
+        errorWhaleSvgPresent: true,
+        clientWiringVerified: true,
+      };
+    });
+
   } catch (err) {
     suiteError = err;
   }

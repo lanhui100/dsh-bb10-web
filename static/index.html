@@ -550,6 +550,12 @@
       background: url("loading-whale-tail.svg?v=10") no-repeat center center;
       background-size: contain;
     }
+    .welcome-spinner.welcome-spinner-error {
+      background: url("error-whale-tail.svg?v=1") no-repeat center center;
+      background-size: contain;
+      -webkit-animation: none;
+      animation: none;
+    }
     @-webkit-keyframes welcome-spin {
       from { -webkit-transform: rotate(0deg); }
       to { -webkit-transform: rotate(360deg); }
@@ -2846,9 +2852,9 @@
 
     // 居中欢迎语：探索未至之境。当且仅当为空白新建会话且无任何消息时居中显示，在用户发送第一条消息后消失。
     // Logo 为静态白色点阵 SVG，无动效（蓝色涟漪已下线）。
-    function updateWelcomePlaceholder() {
+    function updateWelcomePlaceholder(forceShow) {
       if (!welcomePlaceholder) return;
-      var show = (!currentSessionId && allMessages.length === 0);
+      var show = forceShow || (!isDshAlive) || (!currentSessionId && allMessages.length === 0);
       welcomePlaceholder.style.display = show ? 'block' : 'none';
       if (show && welcomePlaceholder.parentNode !== chatContainer) {
         chatContainer.appendChild(welcomePlaceholder);
@@ -2859,9 +2865,11 @@
     // 进入页面即呈现新建对话欢迎页（探索未至之境），同时后台懒加载
     // Workspace 与会话列表；加载期间在标题下方显示旋转光圈 + 轮播趣味文案。
     var welcomeLoadingEl = document.getElementById('welcome-loading');
+    var welcomeSpinnerEl = welcomeLoadingEl ? welcomeLoadingEl.getElementsByClassName('welcome-spinner')[0] : null;
     var welcomeLoadingText = document.getElementById('welcome-loading-text');
     var welcomeReadyEl = document.getElementById('welcome-ready');
     var welcomeErrorEl = document.getElementById('welcome-error');
+    var isDshAlive = true;          // DSH 进程是否存活
     var bootLoading = false;        // /api/bootstrap 在途
     var preloadPending = 0;         // 后台会话列表预取在途数（含当前工作区）
     var welcomePhraseTimer = null;
@@ -2949,6 +2957,66 @@
           };
         }
       }
+    }
+
+    // 设置 DSH 底座运行状态：在线为正常轮播，离线/崩溃时变为红色线条小鲸鱼错误提醒
+    function setDshAliveState(alive, errorText) {
+      isDshAlive = !!alive;
+      if (!isDshAlive) {
+        // 确保初始化界面展示
+        updateWelcomePlaceholder(true);
+        if (welcomeLoadingEl) welcomeLoadingEl.style.display = 'block';
+        if (welcomeSpinnerEl) {
+          welcomeSpinnerEl.className = 'welcome-spinner welcome-spinner-error';
+        }
+        if (welcomePhraseTimer) {
+          clearInterval(welcomePhraseTimer);
+          welcomePhraseTimer = null;
+        }
+        if (welcomeLoadingText) {
+          welcomeLoadingText.style.color = '#F85149';
+          welcomeLoadingText.innerHTML = escapeHtml(errorText || 'DSH 进程未运行或已崩溃');
+        }
+        if (welcomeReadyEl) welcomeReadyEl.style.display = 'none';
+        showWelcomeError(errorText || 'DSH 进程已停止或崩溃，请先启动 dsh 服务', function() {
+          checkDshAndReload();
+        });
+      } else {
+        if (welcomeSpinnerEl) {
+          welcomeSpinnerEl.className = 'welcome-spinner';
+        }
+        if (welcomeLoadingText) {
+          welcomeLoadingText.style.color = '#4EC9B0';
+        }
+        hideWelcomeError();
+        updateWelcomeLoading();
+      }
+    }
+
+    function checkDshAndReload() {
+      setStatus('检测 DSH 进程中...');
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', '/api/dsh/status?refresh=1', true);
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+          var ok = false;
+          var alive = false;
+          if (xhr.status === 200) {
+            try {
+              var data = JSON.parse(xhr.responseText);
+              ok = !!(data && data.ok);
+              alive = !!(data && data.dshAlive);
+            } catch (e) {}
+          }
+          if (ok && alive) {
+            setDshAliveState(true);
+            loadBootstrap();
+          } else {
+            setDshAliveState(false, 'DSH 进程仍未运行，请检查服务状态');
+          }
+        }
+      };
+      xhr.send();
     }
 
     // 会话树行状态标记（对齐 dsh web StateDot 语义：运行蓝、完成绿、等待黄、错误红、中断橙）。
@@ -9989,6 +10057,12 @@
           if (xhr.status === 200) {
             try {
               var data = JSON.parse(xhr.responseText);
+              if (data && data.dshAlive === false) {
+                setDshAliveState(false, 'DSH 进程未运行或已停止');
+                return;
+              } else {
+                setDshAliveState(true);
+              }
               renderBootstrap(data);
             } catch (e) {
               setStatus('解析配置失败: ' + e.message);
@@ -12908,6 +12982,7 @@
     }
 
     // 定期轮询后台运行中会话状态以触发全局横幅通知（轻量 5s 周期）
+    var dshPollCounter = 0;
     setInterval(function() {
       if (!isAuthOk) return; // 未认证通过时严禁后台轮询，防止 401 死循环
       var curCwd = getCwd();
@@ -12928,6 +13003,31 @@
       // W 面板聚合图标时效性：轮换刷新一个含在跑会话的已缓存工作区（每次最多 1 个 cwd），
       // loadSessions 归来分支在 isWsOpen 时自动重绘头部图标
       try { if (typeof refreshStaleWorkspaceSessions === 'function') refreshStaleWorkspaceSessions(); } catch (e) {}
+
+      // 定期探测 DSH 底座进程健康状况（每 10s 一次）
+      dshPollCounter++;
+      if (dshPollCounter % 2 === 0) {
+        var dXhr = new XMLHttpRequest();
+        dXhr.open('GET', '/api/dsh/status', true);
+        dXhr.onreadystatechange = function() {
+          if (dXhr.readyState === 4) {
+            if (dXhr.status === 200) {
+              try {
+                var dData = JSON.parse(dXhr.responseText);
+                if (dData && dData.dshAlive === false) {
+                  setDshAliveState(false, 'DSH 进程未运行或已停止');
+                } else if (!isDshAlive && dData && dData.dshAlive === true) {
+                  setDshAliveState(true);
+                  loadBootstrap();
+                }
+              } catch (eDP) {}
+            } else if (dXhr.status === 502 || dXhr.status === 503) {
+              setDshAliveState(false, 'DSH 进程未运行或已停止');
+            }
+          }
+        };
+        dXhr.send();
+      }
     }, 5000);
 
     // 进入页面：先校验认证状态。

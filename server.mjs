@@ -754,6 +754,67 @@ let hostSessionListInflight = null;
 const HOST_RUNNING_CACHE_TTL_MS = 8000;
 const HOST_TITLE_CACHE_TTL_MS = 15000;
 
+let dshHostAliveCache = { alive: null, at: 0 };
+let dshHostAliveInflight = null;
+const DSH_HOST_ALIVE_TTL_MS = 5000;
+
+/**
+ * 权威检测 DSH 官方 Web 底座进程（3080）是否存活在线。
+ * 在 Q20_MOCK_HOST 模式下直接判定存活；在线模式下采用 1.5s 短超时探活，带 5s 缓存与 In-flight 单飞。
+ */
+async function checkDshHostAlive(force = false) {
+  if (Q20_MOCK_HOST) return true;
+  const now = Date.now();
+  if (!force && dshHostAliveCache.alive !== null && (now - dshHostAliveCache.at < DSH_HOST_ALIVE_TTL_MS)) {
+    return dshHostAliveCache.alive;
+  }
+  if (dshHostAliveInflight) {
+    return dshHostAliveInflight;
+  }
+  dshHostAliveInflight = new Promise((resolve) => {
+    try {
+      const url = new URL(DSH_WEB_URL);
+      const authority = url.host;
+      const cookie = getDshWebAuthCookie(authority);
+      const headers = {
+        'Host': authority,
+        'Origin': url.origin,
+      };
+      if (cookie) headers['Cookie'] = cookie;
+      const clientReq = http.request(
+        url,
+        {
+          method: 'GET',
+          headers,
+          timeout: 1500,
+        },
+        (res) => {
+          res.resume();
+          const alive = res.statusCode !== 502 && res.statusCode !== 503;
+          dshHostAliveCache = { alive, at: Date.now() };
+          resolve(alive);
+        }
+      );
+      clientReq.on('error', () => {
+        dshHostAliveCache = { alive: false, at: Date.now() };
+        resolve(false);
+      });
+      clientReq.on('timeout', () => {
+        clientReq.destroy();
+        dshHostAliveCache = { alive: false, at: Date.now() };
+        resolve(false);
+      });
+      clientReq.end();
+    } catch {
+      dshHostAliveCache = { alive: false, at: Date.now() };
+      resolve(false);
+    }
+  }).finally(() => {
+    dshHostAliveInflight = null;
+  });
+  return dshHostAliveInflight;
+}
+
 /**
  * 统一获取宿主 session/list 的全量数据（合并 running 与 title 提取，带 In-Flight 单飞复用）。
  * 避免 getHostTitleMap 与 getHostRunningSessionIds 分别发起庞大的 2.4MB RPC。
@@ -4961,14 +5022,27 @@ const server = http.createServer((req, res) => {
   }
 
   // API routing
+  if (req.method === 'GET' && pathname === '/api/dsh/status') {
+    try {
+      const force = searchParams.get('refresh') === '1';
+      const dshAlive = await checkDshHostAlive(force);
+      sendJson(res, 200, { ok: true, dshAlive });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, dshAlive: false, error: sanitizeErrorMessage(err) }, req);
+    }
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/bootstrap') {
     try {
       const { models, current, permissions } = await readModelCatalog();
       const workspaces = getWorkspaces();
+      const dshAlive = await checkDshHostAlive(searchParams.get('refresh') === '1');
       sendJson(res, 200, {
         workspaces,
         models,
         permissions,
+        dshAlive,
         current: {
           ...current,
           workspaceCwd: process.cwd(),
