@@ -398,6 +398,44 @@
     }
 
     /* Top Banner Notification Component (Strict ES5 CSS, Q20 720x720 compact) */
+    #archive-back-banner {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 32px;
+      line-height: 32px;
+      background: #1A2624;
+      border-bottom: 1px solid #004D40;
+      color: #80CBC4;
+      font-size: 12px;
+      padding: 0 10px;
+      z-index: 140;
+      display: none;
+      -webkit-box-sizing: border-box;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+    #archive-back-banner .back-btn {
+      color: #FFFFFF;
+      background: #004D40;
+      border: 1px solid #00796B;
+      padding: 2px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-weight: bold;
+      margin-right: 6px;
+    }
+    #archive-back-banner .unarchive-btn {
+      float: right;
+      color: #FFD54F;
+      background: #3E2723;
+      border: 1px solid #FFB300;
+      padding: 2px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 11px;
+    }
     #top-banner-container {
       position: absolute;
       top: 0;
@@ -2204,7 +2242,7 @@
       <select id="session-select" style="display:none;"></select>
       <div id="sess-tree"></div>
     </div>
-    <div class="tree-hint">C 进行中/收起 · V 视图轮换 · F 筛选 · A 归档选中 · R 刷新 · 触控板上下/JK 选择 · 回车确认</div>
+    <div class="tree-hint">C 进行中/收起 · V 视图轮换 · F 筛选 · A 归档/取消归档 · R 刷新 · 触控板上下/JK 选择 · 回车确认</div>
   </div>
 
   <!-- Subagent / Agent Team / Background Task Board modal (shortcut U) -->
@@ -2317,12 +2355,19 @@
         <tr><td class="help-key">F</td><td class="help-desc">从该轮分支为新会话（任意已落盘回复均可，J/K 选中优先）</td></tr>
         <tr><td class="help-key">Z</td><td class="help-desc">一键撤回当前排队中的追发消息并放回输入框</td></tr>
         <tr><td class="help-key">V</td><td class="help-desc">会话面板内轮换视图：当前工作区 → 全工作区进行中 → 全工作区待处理 → 未分组</td></tr>
-        <tr><td class="help-key">A</td><td class="help-desc">归档当前会话；会话面板内归档 J/K 选中的会话 (归档后自动打开会话列表)</td></tr>
+        <tr><td class="help-key">A</td><td class="help-desc">归档/取消归档当前会话；会话面板内归档/取消归档选中的会话</td></tr>
         <tr><td class="help-key">E</td><td class="help-desc">打开并进入顶部首条通知会话 (Enter)</td></tr>
         <tr><td class="help-key">D</td><td class="help-desc">关闭顶部首条通知 (Dismiss)</td></tr>
         <tr><td class="help-key">H</td><td class="help-desc">打开 / 关闭本快捷键速查</td></tr>
       </table>
     </div>
+  </div>
+
+  <!-- Archive Session Back Banner -->
+  <div id="archive-back-banner">
+    <span class="back-btn" id="archive-back-btn">‹ 返回列表</span>
+    <span>📦 当前会话已归档</span>
+    <span class="unarchive-btn" id="archive-unarchive-btn">取消归档 [A]</span>
   </div>
 
   <!-- Top Banner Notification Component -->
@@ -3427,8 +3472,46 @@
     var hasInitialSessionsLoaded = false;
     var userStoppedSessions = {}; // sid -> timestamp (主动停止的会话记录，防止竞态误判为错误横幅)
 
+    var archiveBackBanner = document.getElementById('archive-back-banner');
+    var archiveBackBtn = document.getElementById('archive-back-btn');
+    var archiveUnarchiveBtn = document.getElementById('archive-unarchive-btn');
+
+    function updateArchiveBackBanner() {
+      if (!archiveBackBanner || !chatContainer) return;
+      var sid = currentSessionId;
+      var isArchived = sid && isSessionArchived(sid, getCwd());
+      if (isArchived) {
+        archiveBackBanner.style.display = 'block';
+        chatContainer.style.top = '32px';
+      } else {
+        archiveBackBanner.style.display = 'none';
+        updateChatContainerTop();
+      }
+    }
+
+    if (archiveBackBtn) {
+      archiveBackBtn.onclick = function() {
+        openSess();
+      };
+    }
+
+    if (archiveUnarchiveBtn) {
+      archiveUnarchiveBtn.onclick = function() {
+        if (currentSessionId) {
+          executeUnarchiveSession(currentSessionId, getCwd());
+        }
+      };
+    }
+
     function updateChatContainerTop() {
       if (!topBannerContainer || !chatContainer) return;
+      var sid = currentSessionId;
+      var isArchived = sid && (typeof isSessionArchived === 'function' ? isSessionArchived(sid, getCwd()) : false);
+      if (isArchived) {
+        if (archiveBackBanner) archiveBackBanner.style.display = 'block';
+        chatContainer.style.top = '32px';
+        return;
+      }
       if (bannerNotifications.length === 0) {
         topBannerContainer.style.display = 'none';
         chatContainer.style.top = '0px';
@@ -6662,12 +6745,16 @@
       renderSessTree();
     }
 
-    // 面板内按 A 归档 kb 选中的会话，与详情页 A 键走同一确认+执行链
+    // 面板内按 A 归档/取消归档 kb 选中的会话
     function archiveSelectedSessNode() {
       if (isArchiving) return;
       var n = sessNodes[kbSessIdx];
       if (!n || n.kind !== 'sess' || !n.sid) {
         setStatus('请先用 J/K 选中一条会话 [A]');
+        return;
+      }
+      if (n.isArchived) {
+        executeUnarchiveSession(n.sid, n.cwd);
         return;
       }
       openArchiveConfirm(n.sid, n.cwd);
@@ -7469,9 +7556,11 @@
         visibleCount = 20;
         chatContainer.innerHTML = '';
         updateWelcomePlaceholder();
+        updateArchiveBackBanner();
         setStatus('就绪');
       } else {
         isStreaming = false;
+        updateArchiveBackBanner();
         // 立即用缓存的会话状态表达（attach 同步前的即时反馈）
         var cached = null;
         var list = sessCache[cwd] || [];
@@ -7916,6 +8005,57 @@
       xhr.send(JSON.stringify({ cwd: targetCwd, sessionId: sid }));
     }
 
+    function isSessionArchived(sid, cwd) {
+      if (!sid) return false;
+      var targetCwd = cwd || getCwd();
+      var list = sessCache[targetCwd + '::all'] || sessCache[targetCwd + '::only-archived'] || sessCache[targetCwd] || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id === sid) {
+          return !!list[i].isArchived;
+        }
+      }
+      return false;
+    }
+
+    function executeUnarchiveSession(sid, cwd) {
+      if (!sid) return;
+      var targetCwd = cwd || (typeof wsSelect !== 'undefined' && wsSelect ? wsSelect.value : '') || getCwd();
+      setStatus('正在取消归档会话...');
+      try { delete archivedTombstones[sid]; } catch (e) {}
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/session/unarchive', true);
+      xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+          if (xhr.status === 200) {
+            setStatus('会话已取消归档');
+            // 失效缓存，刷新当前工作区和会话树
+            try {
+              delete sessCache[targetCwd];
+              delete sessCache[targetCwd + '::all'];
+              delete sessCache[targetCwd + '::only-archived'];
+              delete sessCache.__ungrouped__;
+            } catch (eC) {}
+            ungroupedCount = -1;
+            loadSessions(targetCwd, function() {
+              if (isSessOpen) renderSessTree(true);
+            }, sessArchivedFilter);
+            refreshWsList(null, true);
+            updateArchiveBackBanner();
+          } else {
+            var errMsg = '取消归档失败';
+            try {
+              var res = JSON.parse(xhr.responseText);
+              if (res.error) errMsg += ': ' + res.error;
+            } catch (e) {}
+            setStatus(errMsg);
+          }
+        }
+      };
+      xhr.send(JSON.stringify({ cwd: targetCwd, sessionId: sid }));
+    }
+
     function doArchiveCurrentSession() {
       if (isArchiving) return;
       var sid = currentSessionId || sessionSelect.value;
@@ -7923,9 +8063,12 @@
         setStatus('当前为新会话，无需归档');
         return;
       }
+      if (isSessionArchived(sid, getCwd())) {
+        executeUnarchiveSession(sid, getCwd());
+        return;
+      }
       openArchiveConfirm(sid);
     }
-
     if (archiveConfirmCancelBtn) {
       archiveConfirmCancelBtn.onclick = function() {
         closeArchiveConfirm();

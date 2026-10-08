@@ -114,6 +114,21 @@ export async function runArchiveFilterSuite() {
     const s2Only = onlyList.find(s => s.id === sid2);
     assert.strictEqual(s2Only?.isArchived, true, 'sid2 in filter=only-archived must have isArchived: true');
 
+    // 6. 测试 /api/session/unarchive 取消归档能力
+    console.log(`  6) Unarchiving session ${sid2}...`);
+    const rUnarch = await httpRequest('/api/session/unarchive', {
+      method: 'POST',
+      body: { cwd, sessionId: sid2 },
+      base,
+    });
+    assert.strictEqual(rUnarch.status, 200);
+    assert.strictEqual(rUnarch.data?.ok, true);
+
+    const postUnarchRes = await httpRequest(`/api/sessions?cwd=${encodeURIComponent(cwd)}&refresh=1`, { base });
+    assert.strictEqual(postUnarchRes.status, 200);
+    const postUnarchIds = (postUnarchRes.data || []).map(s => s.id);
+    assert.ok(postUnarchIds.includes(sid2), 'After unarchive, default list must include sid2 again');
+
     console.log('--- Archive Filter Suite Verified ---');
   } finally {
     await mock.stop();

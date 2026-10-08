@@ -506,6 +506,36 @@ function readArchivedSessionIds() {
   return new Set(ids.map(String));
 }
 
+function removeArchivedSessionId(sessionId) {
+  const raw = fs.readFileSync(WORKSPACE_DOMAIN_FILE, 'utf8');
+  const doc = JSON.parse(raw);
+  if (!doc.global || !Array.isArray(doc.global.archivedSessionIds)) {
+    return false;
+  }
+  const idx = doc.global.archivedSessionIds.indexOf(sessionId);
+  if (idx === -1) return false;
+  doc.global.archivedSessionIds.splice(idx, 1);
+  const tmp = path.join(path.dirname(WORKSPACE_DOMAIN_FILE), `.${crypto.randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, WORKSPACE_DOMAIN_FILE);
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    throw err;
+  }
+  const st = fs.statSync(WORKSPACE_DOMAIN_FILE);
+  workspaceDomainCache = { data: doc, mtimeMs: st.mtimeMs };
+  try { invalidateUngroupedCache(); } catch {}
+  return true;
+}
+
+function unmarkArchivedOverlay(id) {
+  if (!id) return;
+  archivedOverlay.delete(String(id));
+  workspacesCache = null;
+  try { invalidateUngroupedCache(); } catch {}
+}
+
 /**
  * 追加一个 id 到官方归档名单（原子写：tmp + rename，与 dsh storage-json writeAtomic 同协议）。
  */
@@ -563,6 +593,93 @@ function getDshWebAuthCookie(authority) {
     console.warn(`[WARN] Failed to get DSH Web auth cookie: ${err.message}`);
     return null;
   }
+}
+
+async function callDshWebUnarchiveSession(sessionId) {
+  if (Q20_MOCK_HOST) {
+    return Promise.resolve({ ok: true, value: {} });
+  }
+  return new Promise((resolve) => {
+    try {
+      const url = new URL('/api/workspace/unarchiveSession', DSH_WEB_URL);
+      const authority = url.host; // e.g. 127.0.0.1:3080
+      const cookie = getDshWebAuthCookie(authority);
+      const headers = {
+        'Host': authority,
+        'Origin': url.origin,
+        'Content-Type': 'application/json',
+      };
+      if (cookie) {
+        headers['Cookie'] = cookie;
+      }
+
+      const reqBody = JSON.stringify({
+        type: 'client-request',
+        rpcId: `q20-unarchive-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        method: 'workspace/unarchiveSession',
+        payload: {
+          args: {
+            request: {
+              sessionId,
+            },
+          },
+        },
+      });
+
+      const clientReq = http.request(
+        url,
+        {
+          method: 'POST',
+          headers,
+          timeout: 2500,
+        },
+        (res) => {
+          let rawData = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => {
+            rawData += chunk;
+          });
+          res.on('end', () => {
+            if (res.statusCode === 200) {
+              try {
+                const parsed = JSON.parse(rawData);
+                if (parsed && parsed.result && parsed.result.ok) {
+                  console.log(`[DSH RPC] Successfully unarchived session ${sessionId} via DSH Web at ${DSH_WEB_URL}`);
+                  resolve({ ok: true, remote: true, value: parsed.result.value });
+                  return;
+                } else {
+                  const errDesc = (parsed && parsed.result && parsed.result.error && parsed.result.error.message) || rawData;
+                  console.warn(`[DSH RPC WARN] DSH Web responded with unarchive RPC error: ${errDesc}`);
+                  resolve({ ok: false, error: errDesc });
+                  return;
+                }
+              } catch (e) {
+                console.warn(`[DSH RPC WARN] Failed to parse DSH Web response: ${e.message}`);
+                resolve({ ok: false, error: e.message });
+                return;
+              }
+            }
+            console.warn(`[DSH RPC WARN] DSH Web HTTP ${res.statusCode}: ${rawData.slice(0, 100)}`);
+            resolve({ ok: false, status: res.statusCode, error: rawData });
+          });
+        }
+      );
+
+      clientReq.on('error', (err) => {
+        resolve({ ok: false, error: err.message });
+      });
+
+      clientReq.on('timeout', () => {
+        clientReq.destroy();
+        resolve({ ok: false, error: 'Request to DSH Web timed out' });
+      });
+
+      clientReq.write(reqBody);
+      clientReq.end();
+    } catch (err) {
+      resolve({ ok: false, error: err.message });
+    }
+  });
 }
 
 /**
@@ -5450,6 +5567,50 @@ const server = http.createServer((req, res) => {
       sendJson(res, 200, { ok: true, message: `Session ${sessionId} archived successfully` });
     } catch (err) {
       console.error(`[API /api/session/archive ERROR] ${err.stack || err.message}`);
+      sendJson(res, 500, { error: sanitizeErrorMessage(err) }, req);
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && (pathname === '/api/session/unarchive' || pathname === '/api/session/restore')) {
+    let body;
+    try {
+      body = await parseJsonBody(req);
+    } catch {
+      body = {};
+    }
+    const { cwd, sessionId } = body;
+    if (!cwd || !sessionId) {
+      sendJson(res, 400, { error: 'Missing required field "cwd" or "sessionId"' });
+      return;
+    }
+    try {
+      // 优先通知 DSH 官方 Web 服务执行取消归档
+      const rpcResult = await callDshWebUnarchiveSession(sessionId);
+      if (rpcResult && rpcResult.ok) {
+        unmarkArchivedOverlay(sessionId);
+        try {
+          const st = fs.statSync(WORKSPACE_DOMAIN_FILE);
+          const doc = JSON.parse(fs.readFileSync(WORKSPACE_DOMAIN_FILE, 'utf8'));
+          workspaceDomainCache = { data: doc, mtimeMs: st.mtimeMs };
+        } catch {}
+        workspacesCache = null;
+        hostRunningCache = { ids: null, at: 0 };
+        try { invalidateSessionsCache(); } catch {}
+        try { invalidateUngroupedCache(); } catch {}
+        console.log(`[API /api/session/unarchive] unarchived ${sessionId} via official DSH Web RPC`);
+      } else {
+        removeArchivedSessionId(sessionId);
+        unmarkArchivedOverlay(sessionId);
+        workspacesCache = null;
+        hostRunningCache = { ids: null, at: 0 };
+        try { invalidateSessionsCache(); } catch {}
+        try { invalidateUngroupedCache(); } catch {}
+        console.log(`[API /api/session/unarchive] unarchived ${sessionId} via local workspace domain write`);
+      }
+      sendJson(res, 200, { ok: true, message: `Session ${sessionId} unarchived successfully` });
+    } catch (err) {
+      console.error(`[API /api/session/unarchive ERROR] ${err.stack || err.message}`);
       sendJson(res, 500, { error: sanitizeErrorMessage(err) }, req);
     }
     return;
