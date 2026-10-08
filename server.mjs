@@ -2699,32 +2699,36 @@ const sessionsInflight = new Map(); // cwd -> Promise<list>
 function invalidateSessionsCache(targetCwd = null) {
   if (targetCwd) {
     const norm = path.resolve(targetCwd);
-    sessionsCache.delete(norm);
+    for (const k of sessionsCache.keys()) {
+      if (k === norm || k.startsWith(norm + '::')) sessionsCache.delete(k);
+    }
   } else {
     sessionsCache.clear();
   }
 }
 
-async function getSessionsForCwdCached(targetCwd) {
+async function getSessionsForCwdCached(targetCwd, filter = 'hide-archived') {
   const normalizedCwd = path.resolve(targetCwd);
+  const normFilter = (filter === 'all' || filter === 'only-archived') ? filter : 'hide-archived';
+  const cacheKey = normalizedCwd + '::' + normFilter;
   const now = Date.now();
-  const cached = sessionsCache.get(normalizedCwd);
+  const cached = sessionsCache.get(cacheKey);
   if (cached && now - cached.at < SESSIONS_CACHE_TTL_MS) {
     return cached.list;
   }
-  if (sessionsInflight.has(normalizedCwd)) {
-    return sessionsInflight.get(normalizedCwd);
+  if (sessionsInflight.has(cacheKey)) {
+    return sessionsInflight.get(cacheKey);
   }
   const promise = (async () => {
     try {
-      const list = await getSessionsForCwd(targetCwd);
-      sessionsCache.set(normalizedCwd, { list, at: Date.now() });
+      const list = await getSessionsForCwd(targetCwd, normFilter);
+      sessionsCache.set(cacheKey, { list, at: Date.now() });
       return list;
     } finally {
-      sessionsInflight.delete(normalizedCwd);
+      sessionsInflight.delete(cacheKey);
     }
   })();
-  sessionsInflight.set(normalizedCwd, promise);
+  sessionsInflight.set(cacheKey, promise);
   return promise;
 }
 
@@ -2734,13 +2738,14 @@ async function getSessionsForCwdCached(targetCwd) {
  * 1. 如果工作区在 workspace.json 中登记，其有效会话由 ws.sessionIds 定义，并排除 global.archivedSessionIds。
  * 2. 如果工作区未在 workspace.json 中，则退回扫描目录并排除 archivedSessionIds。
  */
-async function getSessionsForCwd(targetCwd) {
+async function getSessionsForCwd(targetCwd, filter = 'hide-archived') {
   const wsDir = findWorkspaceDir(targetCwd);
   if (!wsDir || !fs.existsSync(wsDir)) return [];
 
   const normalizedCwd = path.resolve(targetCwd);
   const domain = readWorkspaceDomain();
   const archived = archivedWithOverlay();
+  const normFilter = (filter === 'all' || filter === 'only-archived') ? filter : 'hide-archived';
 
   let registeredSessionIds = null;
   if (domain && domain.tables && domain.tables.workspaces) {
@@ -2781,7 +2786,9 @@ async function getSessionsForCwd(targetCwd) {
     } catch {}
 
     for (const sid of registeredSessionIds) {
-      if (archived.has(String(sid))) continue;
+      const isArchived = archived.has(String(sid));
+      if (normFilter === 'hide-archived' && isArchived) continue;
+      if (normFilter === 'only-archived' && !isArchived) continue;
       let zstdPath = null;
       let st = null;
 
@@ -2828,6 +2835,7 @@ async function getSessionsForCwd(targetCwd) {
             version: header?.version,
             cwd: header?.cwd || targetCwd,
             isRunning,
+            isArchived,
             state: isRunning ? 'running' : sessionTerminalState(zstdPath, task),
           });
         } catch {}
@@ -2852,7 +2860,9 @@ async function getSessionsForCwd(targetCwd) {
       const zst = fs.statSync(zstdPath);
       const header = readSessionHeader(zstdPath);
       const sid = header?.id || s;
-      if (archived.has(String(sid)) || archived.has(s)) continue;
+      const isArchived = archived.has(String(sid)) || archived.has(s);
+      if (normFilter === 'hide-archived' && isArchived) continue;
+      if (normFilter === 'only-archived' && !isArchived) continue;
       const task = activeTasks.get(sid);
       const isRunning = await isSessionUiRunning(task, sPath, sid, false, hostRunningIds);
       if (!isRunning && header && header.hasTurns === false) {
@@ -2869,6 +2879,7 @@ async function getSessionsForCwd(targetCwd) {
         version: header?.version,
         cwd: header?.cwd || targetCwd,
         isRunning,
+        isArchived,
         state: isRunning ? 'running' : sessionTerminalState(zstdPath, task),
       });
     } catch {
@@ -5072,8 +5083,9 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/sessions') {
     try {
       const cwd = searchParams.get('cwd');
+      const filter = searchParams.get('filter') || 'hide-archived';
       const sessT0 = Date.now();
-      console.log(`[API /api/sessions] fetching cwd: ${cwd}`);
+      console.log(`[API /api/sessions] fetching cwd: ${cwd}, filter: ${filter}`);
       if (!cwd) {
         sendJson(res, 400, { error: 'Missing query parameter "cwd"' });
         return;
@@ -5081,7 +5093,7 @@ const server = http.createServer((req, res) => {
       if (searchParams.get('refresh') === '1') {
         invalidateSessionsCache(cwd);
       }
-      const sessions = await getSessionsForCwdCached(cwd);
+      const sessions = await getSessionsForCwdCached(cwd, filter);
       console.log(`[API /api/sessions] resolved ${sessions.length} sessions for cwd: ${cwd} in ${Date.now() - sessT0}ms`);
       sendJson(res, 200, sessions);
     } catch (err) {

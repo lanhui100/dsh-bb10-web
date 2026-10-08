@@ -2204,7 +2204,7 @@
       <select id="session-select" style="display:none;"></select>
       <div id="sess-tree"></div>
     </div>
-    <div class="tree-hint">C 进行中/收起 · V 视图轮换 · A 归档选中 · R 刷新 · 触控板上下/JK 选择 · 回车确认</div>
+    <div class="tree-hint">C 进行中/收起 · V 视图轮换 · F 筛选 · A 归档选中 · R 刷新 · 触控板上下/JK 选择 · 回车确认</div>
   </div>
 
   <!-- Subagent / Agent Team / Background Task Board modal (shortcut U) -->
@@ -4896,6 +4896,8 @@
     var kbSessIdx = -1;
     // 会话面板视图模式：0=当前工作区全部，1=全工作区进行中，2=全工作区待处理，3=未分组
     var sessViewMode = 0;
+    // 当前工作区会话视图筛选：'hide-archived' (默认), 'all' (显示全部包括已归档), 'only-archived' (仅显示已归档)
+    var sessArchivedFilter = 'hide-archived';
     var kbModelIdx = -1;
     var kbPermIdx = -1;
     var wsNodes = [];
@@ -6398,8 +6400,14 @@
           break;
         }
       }
+      var filterTag = '';
+      if (sessArchivedFilter === 'all') {
+        filterTag = ' <span style="font-size:11px;color:#4EC9B0;font-weight:normal;">[全部]</span>';
+      } else if (sessArchivedFilter === 'only-archived') {
+        filterTag = ' <span style="font-size:11px;color:#FFA000;font-weight:normal;">[已归档]</span>';
+      }
       if (sessPanelTitle) {
-        sessPanelTitle.innerHTML = '💬 会话 · ' + escapeHtml(curWsName);
+        sessPanelTitle.innerHTML = '💬 会话 · ' + escapeHtml(curWsName) + filterTag;
       }
 
       // mode 1/2：全工作区聚合视图（进行中 / 待处理）；mode 3：未分组
@@ -6413,14 +6421,16 @@
         return;
       }
 
-      var list = sessCache[cwd];
+      var cacheKey = cwd + (sessArchivedFilter === 'hide-archived' ? '' : '::' + sessArchivedFilter);
+      var list = sessCache[cacheKey];
       if (!list) {
         var ld = mkStateNode('load', '加载会话中…');
         sessTree.appendChild(ld);
         sessNodes.push({ el: ld, kind: 'noop' });
-        loadSessions(cwd);
+        loadSessions(cwd, null, sessArchivedFilter);
       } else if (list.length === 0) {
-        var emptyNode = mkStateNode('empty', '暂无历史会话');
+        var emptyText = (sessArchivedFilter === 'only-archived') ? '暂无已归档会话' : '暂无历史会话';
+        var emptyNode = mkStateNode('empty', emptyText);
         sessTree.appendChild(emptyNode);
         sessNodes.push({ el: emptyNode, kind: 'noop' });
       } else {
@@ -6429,14 +6439,15 @@
           (function(s, idx) {
             var isCur = (s.id === currentSessionId);
             if (isCur) activeIdx = idx;
-            var cls = 'tree-sess' + (isCur ? ' active-sess' : '');
-            var label = sessionStateMark(s) + '<div class="sess-title">' + escapeHtml(sessLabel(s)) + sessDateHtml(s) + '</div>';
+            var cls = 'tree-sess' + (isCur ? ' active-sess' : '') + (s.isArchived ? ' archived-sess' : '');
+            var archBadge = s.isArchived ? '<span style="color:#888888; font-size:10px; margin-right:4px;">[📦 已归档]</span>' : '';
+            var label = sessionStateMark(s) + '<div class="sess-title">' + archBadge + escapeHtml(sessLabel(s)) + sessDateHtml(s) + '</div>';
             var sn = mkNode(label, cls, function() {
               selectSession(cwd, s.id);
               closeSess();
             });
             sessTree.appendChild(sn);
-            sessNodes.push({ el: sn, kind: 'sess', cwd: cwd, sid: s.id });
+            sessNodes.push({ el: sn, kind: 'sess', cwd: cwd, sid: s.id, isArchived: !!s.isArchived });
           })(list[k], k);
         }
         if (kbSessIdx < 0) {
@@ -6630,6 +6641,25 @@
       if (sessViewMode === 3) loadUngrouped();
       var tip = sessViewMode === 1 ? '全工作区进行中 [V]' : (sessViewMode === 2 ? '全工作区待处理 [V]' : (sessViewMode === 3 ? '未分组会话 [V]' : '当前工作区全部 [V]'));
       setStatus(tip);
+    }
+
+    function cycleSessArchivedFilter() {
+      if (sessViewMode !== 0) {
+        setStatus('仅当前工作区模式支持视图筛选 [V 轮换至当前]');
+        return;
+      }
+      if (sessArchivedFilter === 'hide-archived') {
+        sessArchivedFilter = 'all';
+        setStatus('当前工作区：显示全部(含已归档) [F]');
+      } else if (sessArchivedFilter === 'all') {
+        sessArchivedFilter = 'only-archived';
+        setStatus('当前工作区：仅已归档 [F]');
+      } else {
+        sessArchivedFilter = 'hide-archived';
+        setStatus('当前工作区：隐藏已归档 [F]');
+      }
+      kbSessIdx = -1;
+      renderSessTree();
     }
 
     // 面板内按 A 归档 kb 选中的会话，与详情页 A 键走同一确认+执行链
@@ -10192,31 +10222,40 @@
       } catch (e) {}
     }
 
-    function loadSessions(cwd, done) {
-      if (sessLoading[cwd]) { if (done) done(); return; }
-      sessLoading[cwd] = true;
+    function loadSessions(cwd, done, filter) {
+      var useFilter = (filter === 'all' || filter === 'only-archived') ? filter : 'hide-archived';
+      var loadKey = cwd + (useFilter === 'hide-archived' ? '' : '::' + useFilter);
+      if (sessLoading[loadKey]) { if (done) done(); return; }
+      sessLoading[loadKey] = true;
       var isActive = (cwd === getCwd());
       // 仅在空白未进入会话且正在查看会话面板时才展示列表加载提示，严禁静默轮询冲刷当前会话状态
       if (isActive && !currentSessionId && isSessOpen) {
         setStatus('加载会话列表中...');
       }
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', '/api/sessions?cwd=' + encodeURIComponent(cwd), true);
+      var filterParam = (useFilter === 'hide-archived') ? '' : '&filter=' + encodeURIComponent(useFilter);
+      xhr.open('GET', '/api/sessions?cwd=' + encodeURIComponent(cwd) + filterParam, true);
       xhr.onreadystatechange = function() {
         if (xhr.readyState === 4) {
-          sessLoading[cwd] = false;
+          sessLoading[loadKey] = false;
           var status = 0;
           try { status = xhr.status; } catch (e) {}
           if (status === 200 || status === 0) {
             try {
               var sessions = JSON.parse(xhr.responseText);
-              // 归档墓碑过滤：轮询/重拉在官方落盘延迟窗口内可能带回已归档项，直接剔除防闪回。
-              sessions = filterArchivedTombstones(sessions);
-              sessCache[cwd] = sessions;
-              try { sessCacheAt[cwd] = (new Date()).getTime(); } catch (eAt) {}
-              syncHiddenSessOptions(cwd, sessions);
-              checkSessionsStateChanges(cwd, sessions);
-              if (currentSessionId && cwd === getCwd()) {
+              // 归档墓碑过滤：轮询/重拉在官方落盘延迟窗口内可能带回已归档项
+              if (useFilter === 'hide-archived') {
+                sessions = filterArchivedTombstones(sessions);
+              }
+              sessCache[loadKey] = sessions;
+              try { sessCacheAt[loadKey] = (new Date()).getTime(); } catch (eAt) {}
+              if (useFilter === 'hide-archived') {
+                sessCache[cwd] = sessions;
+                try { sessCacheAt[cwd] = (new Date()).getTime(); } catch (eAt2) {}
+                syncHiddenSessOptions(cwd, sessions);
+                checkSessionsStateChanges(cwd, sessions);
+              }
+              if (currentSessionId && cwd === getCwd() && useFilter === 'hide-archived') {
                 var matchedCurSess = null;
                 for (var si = 0; si < sessions.length; si++) {
                   if (sessions[si].id === currentSessionId) {
@@ -12533,6 +12572,11 @@
         if (code === 86) { // 'V': 视图轮换（当前工作区 → 全工作区进行中 → 全工作区待处理 → 未分组）
           if (e.preventDefault) e.preventDefault();
           cycleSessViewMode();
+          return false;
+        }
+        if (code === 70) { // 'F': 当前工作区视图筛选轮换（隐藏已归档 → 显示全部 → 仅已归档）
+          if (e.preventDefault) e.preventDefault();
+          cycleSessArchivedFilter();
           return false;
         }
         if (code === 65) { // 'A': 归档面板中选中的会话（与详情页 A 键同流程）

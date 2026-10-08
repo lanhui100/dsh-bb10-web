@@ -1,0 +1,13 @@
+{
+  "external_call_timeout_ms": 3000,
+  "retry": {
+    "max_attempts": 3,
+    "backoff_ms": 200
+  },
+  "concurrency_lock": "single-writer-state-mutex",
+  "logging": {
+    "format": "json",
+    "required_fields": ["trace_id", "timestamp", "level"]
+  },
+  "resource_release": ["clear-timers", "abort-xhr", "close-sockets"]
+}
