@@ -1871,7 +1871,7 @@ async function main() {
     // 5. Session List Structure & State Model Contract
     await runner.run('Sessions List Projection & State Semantics Contract', async () => {
       const currentCwd = process.cwd();
-      const res = await httpRequest(`/api/sessions?cwd=${encodeURIComponent(currentCwd)}`);
+      const res = await httpRequest(`/api/sessions?cwd=${encodeURIComponent(currentCwd)}`, { timeout: 30000 });
       if (res.status !== 200) {
         throw new Error(`Expected HTTP 200, got ${res.status}`);
       }
@@ -1930,7 +1930,7 @@ async function main() {
       }
 
       // Subtest 6.3: Query existing session from sessions list if available
-      const resList = await httpRequest(`/api/sessions?cwd=${encodeURIComponent(currentCwd)}`);
+      const resList = await httpRequest(`/api/sessions?cwd=${encodeURIComponent(currentCwd)}`, { timeout: 30000 });
       let sampleStats = null;
       if (resList.status === 200 && Array.isArray(resList.body) && resList.body.length > 0) {
         const targetSid = resList.body[0].id;
