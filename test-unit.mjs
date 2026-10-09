@@ -2085,6 +2085,12 @@ async function main() {
       if (!html.includes('xhr.__token !== sessionSeqToken')) {
         throw new Error('Missing sessionSeqToken guard in attachSession onreadystatechange');
       }
+      if (!html.includes('openTaskDetail')) {
+        throw new Error('Missing openTaskDetail implementation in static/index.html');
+      }
+      if (!html.includes('task-detail-overlay')) {
+        throw new Error('Missing task-detail-overlay in static/index.html');
+      }
       if (!html.includes('xhr.__hasTerminalEvent = true;')) {
         throw new Error('Missing __hasTerminalEvent latch in attachSession');
       }

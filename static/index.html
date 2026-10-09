@@ -2495,6 +2495,21 @@
     </div>
   </div>
 
+  <!-- Task Detail Dialog (BlackBerry Q20 720x720 modal) -->
+  <div id="task-detail-overlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.88); z-index: 450; display: none;">
+    <div id="task-detail-close-btn" class="panel-close-btn">✕</div>
+    <div id="task-detail-box" style="position: absolute; top: 10%; bottom: 10%; left: 16px; right: 16px; background: #1E1E1E; border: 1px solid #444444; border-radius: 4px; padding: 12px; -webkit-box-sizing: border-box; box-sizing: border-box; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;">
+      <div style="font-size: 14px; font-weight: bold; color: #FFFFFF; margin-bottom: 8px; line-height: 18px; border-bottom: 1px solid #333333; padding-bottom: 6px;">
+        <span style="color: #00897B; margin-right: 4px;">📋</span><span id="task-detail-title">团队任务详情</span>
+      </div>
+      <div id="task-detail-content" style="position: relative; -webkit-box-flex: 1; flex: 1; overflow-y: scroll; -webkit-overflow-scrolling: touch; font-size: 12px; color: #D8D8D8; line-height: 18px; word-break: break-all;">
+      </div>
+      <div style="text-align: right; overflow: hidden; margin-top: 8px; padding-top: 6px; border-top: 1px solid #333333;">
+        <button id="task-detail-ok-btn" class="btn-sm" style="background: #00897B; border-color: #00695C; color: #FFFFFF; min-width: 64px; font-weight: bold;">关闭 [↵]</button>
+      </div>
+    </div>
+  </div>
+
   <!-- BB10 manual copy assist overlay: execCommand('copy') is a no-op on BB10 WebKit 537,
        so on failure we pre-select the full text and let the user long-press -> Copy natively. -->
   <div id="copy-assist-overlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.88); z-index: 300; display: none;">
@@ -3321,6 +3336,50 @@
     var subagentCloseBtn = document.getElementById('subagent-close-btn');
     var subagentTree = document.getElementById('subagent-tree');
     var subagentPanelTitle = document.getElementById('subagent-panel-title');
+
+    var taskDetailOverlay = document.getElementById('task-detail-overlay');
+    var taskDetailCloseBtn = document.getElementById('task-detail-close-btn');
+    var taskDetailTitle = document.getElementById('task-detail-title');
+    var taskDetailContent = document.getElementById('task-detail-content');
+    var taskDetailOkBtn = document.getElementById('task-detail-ok-btn');
+    var isTaskDetailOpen = false;
+
+    function openTaskDetail(task) {
+      if (!task || !taskDetailOverlay) return;
+      isTaskDetailOpen = true;
+      if (taskDetailTitle) {
+        taskDetailTitle.innerHTML = '📋 ' + escapeHtml(task.subject || task.id || '任务详情');
+      }
+      if (taskDetailContent) {
+        var h = '';
+        h += '<div style="margin-bottom: 6px;"><strong style="color: #4EC9B0;">任务 ID:</strong> ' + escapeHtml(task.id || '-') + '</div>';
+        var statusZh = task.status === 'completed' ? '<span class="done-dot">●</span> 已完成 (completed)' : (task.status === 'in_progress' ? '<span class="run-dot">●</span> 进行中 (in_progress)' : '<span class="wait-dot">○</span> 待办 (pending)');
+        h += '<div style="margin-bottom: 6px;"><strong style="color: #4EC9B0;">状态:</strong> ' + statusZh + '</div>';
+        if (task.ownerName || task.owner) {
+          h += '<div style="margin-bottom: 6px;"><strong style="color: #4EC9B0;">负责人:</strong> ' + escapeHtml(task.ownerName || task.owner) + '</div>';
+        }
+        if (typeof task.revision === 'number') {
+          h += '<div style="margin-bottom: 6px;"><strong style="color: #888888;">版本:</strong> r' + task.revision + '</div>';
+        }
+        if (task.blockedBy && task.blockedBy.length > 0) {
+          h += '<div style="margin-bottom: 6px;"><strong style="color: #E5C07B;">依赖前置:</strong> ' + escapeHtml(task.blockedBy.join(', ')) + '</div>';
+        }
+        if (task.writeScopes && task.writeScopes.length > 0) {
+          h += '<div style="margin-bottom: 6px;"><strong style="color: #888888;">写入范围:</strong> ' + escapeHtml(task.writeScopes.join(', ')) + '</div>';
+        }
+        h += '<div style="margin-top: 8px; border-top: 1px dashed #333333; padding-top: 8px;"><strong style="color: #FFFFFF;">任务描述与验收标准:</strong></div>';
+        h += '<div style="margin-top: 4px; padding: 6px; background: #121212; border: 1px solid #333333; border-radius: 3px; white-space: pre-wrap; font-family: monospace; font-size: 11px; line-height: 16px; color: #E0E0E0;">' + escapeHtml(task.description || '(无详细描述)') + '</div>';
+        taskDetailContent.innerHTML = h;
+      }
+      taskDetailOverlay.style.display = 'block';
+    }
+
+    function closeTaskDetail() {
+      isTaskDetailOpen = false;
+      if (taskDetailOverlay) {
+        taskDetailOverlay.style.display = 'none';
+      }
+    }
 
     var modelOverlay = document.getElementById('model-overlay');
     var modelCloseBtn = document.getElementById('model-close-btn');
@@ -6820,10 +6879,10 @@
         for (var k = 0; k < tasks.length; k++) {
           (function(tsk) {
             var isDone = tsk.status === 'completed';
-            var tDot = isDone ? '<span class="done-dot">●</span>' : '<span class="wait-dot">○</span>';
+            var tDot = isDone ? '<span class="done-dot">●</span>' : (tsk.status === 'in_progress' ? '<span class="run-dot">●</span>' : '<span class="wait-dot">○</span>');
             var tHtml = tDot + '<div class="sess-title"><span class="subagent-badge team">团队任务</span>' + escapeHtml(tsk.subject || tsk.id) + '</div>';
-            var tn = mkNode(tHtml, 'tree-sess', function() {});
-            pushNode(tn, { el: tn, kind: 'noop' });
+            var tn = mkNode(tHtml, 'tree-sess', null);
+            pushNode(tn, { el: tn, kind: 'task', item: tsk });
           })(tasks[k]);
         }
 
@@ -6949,10 +7008,6 @@
               var list = data.subagents || data;
               var tasks = data.tasks || [];
               var isEmpty = (!list || list.length === 0) && (!tasks || tasks.length === 0);
-              if (isEmpty && sid) {
-                loadWorkspaceSubagentsFallback(cwd, cacheKey, mySeq);
-                return;
-              }
               subagentLoading = false;
               subagentCache[cacheKey] = data;
               try { subagentLastFetchAt[cacheKey] = (new Date()).getTime(); } catch (eTs) {}
@@ -7027,42 +7082,7 @@
     }
 
     function loadWorkspaceSubagentsFallback(cwd, cacheKey, parentSeq) {
-      var mySeq = (typeof parentSeq === 'number') ? parentSeq : (++subagentReqSeq);
-      var url = '/api/session/subagents?cwd=' + encodeURIComponent(cwd) + '&limit=' + subagentPageSize + '&offset=0';
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', url, true);
-      xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4) {
-          if (mySeq !== subagentReqSeq) return;
-          subagentLoading = false;
-          var status = 0;
-          try { status = xhr.status; } catch (e) {}
-          if (status === 200 || status === 0) {
-            try {
-              var data = JSON.parse(xhr.responseText);
-              data.fallback = true;
-              subagentCache[cacheKey] = data;
-              try { subagentLastFetchAt[cacheKey] = (new Date()).getTime(); } catch (eTs) {}
-              if (isSubagentOpen) {
-                renderSubagentTree();
-              }
-            } catch (err) {
-              if (isSubagentOpen) {
-                subagentTree.innerHTML = '';
-                var errNode = mkNode('加载失败: ' + (err.message || '格式错误'), 'tree-more', function() {});
-                subagentTree.appendChild(errNode);
-              }
-            }
-          } else {
-            if (isSubagentOpen) {
-              subagentTree.innerHTML = '';
-              var httpErrNode = mkNode('请求失败: HTTP ' + status, 'tree-more', function() {});
-              subagentTree.appendChild(httpErrNode);
-            }
-          }
-        }
-      };
-      xhr.send();
+      // 废弃跨会话回退：保持会话隔离性，避免串台展示其他会话的智能体
     }
 
     function renderModelTree() {
@@ -7758,6 +7778,10 @@
                   growSubagentWindow();
                   return;
                 }
+                if (subagentNodes[i].kind === 'task' && subagentNodes[i].item) {
+                  openTaskDetail(subagentNodes[i].item);
+                  return;
+                }
                 if (subagentNodes[i].kind === 'subagent' && subagentNodes[i].item) {
                   selectSubagentSession(subagentNodes[i].item);
                   return;
@@ -7767,6 +7791,26 @@
             return;
           }
           t = t.parentNode;
+        }
+      };
+    }
+
+    if (taskDetailCloseBtn) {
+      taskDetailCloseBtn.onclick = function(e) {
+        if (e.stopPropagation) e.stopPropagation();
+        closeTaskDetail();
+      };
+    }
+    if (taskDetailOkBtn) {
+      taskDetailOkBtn.onclick = function(e) {
+        if (e.stopPropagation) e.stopPropagation();
+        closeTaskDetail();
+      };
+    }
+    if (taskDetailOverlay) {
+      taskDetailOverlay.onclick = function(e) {
+        if (e.target === taskDetailOverlay) {
+          closeTaskDetail();
         }
       };
     }
@@ -12728,6 +12772,14 @@
           return false;
         }
       }
+      if (isTaskDetailOpen) {
+        if (code === 13 || code === 88 || code === 27) { // Enter, X or Esc to close task detail
+          if (e.preventDefault) e.preventDefault();
+          closeTaskDetail();
+          return false;
+        }
+        return false;
+      }
       if (isSubagentOpen) {
         if (code === 74 || code === 40) {
           if (e.preventDefault) e.preventDefault();
@@ -12748,6 +12800,8 @@
             var targetSaNode = subagentNodes[kbSubagentIdx];
             if (targetSaNode && targetSaNode.kind === 'more') {
               growSubagentWindow();
+            } else if (targetSaNode && targetSaNode.kind === 'task' && targetSaNode.item) {
+              openTaskDetail(targetSaNode.item);
             } else if (targetSaNode && targetSaNode.item) {
               selectSubagentSession(targetSaNode.item);
             }
