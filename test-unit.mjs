@@ -2077,6 +2077,72 @@ async function main() {
       };
     });
 
+    // 7b. 多智能体看板懒加载：lite 精简映射契约（lib/subagent-lite.mjs 纯函数门禁）
+    await runner.run('Subagent lite lazy-load mapping contract (lib/subagent-lite.mjs)', async () => {
+      const { applySubagentLite } = await import('./lib/subagent-lite.mjs');
+      const full = {
+        parentId: 'p-1',
+        cwd: '/w',
+        total: 2,
+        subagents: [
+          { id: 'sa-1', parentId: 'p-1', title: '后台任务A', label: 'A', name: '', role: 'subagent', mode: 'one-shot', kind: '后台任务', running: true, isRunning: true, state: 'running', status: 'running', model: 'deepseek-v4-flash', updatedAt: 1, createdAt: 1, cwd: '/w' },
+          { id: 'tm-1', parentId: 'p-1', title: 'B (x)', label: 'B', name: 'B', role: 'teammate', mode: 'team', kind: 'Agent Team', running: false, isRunning: false, state: 'done', status: 'done', model: 'gpt-x', updatedAt: 2, createdAt: 2, cwd: '/w' },
+        ],
+        tasks: [
+          { id: 't-1', subject: '说明', status: 'in_progress', ownerName: 'alice', revision: 3, description: '长描述与验收标准…', blockedBy: ['t-0'], writeScopes: ['src/'] },
+          { id: 't-2', subject: '说明2', status: 'pending' },
+        ],
+      };
+      const lite = applySubagentLite(full);
+      if (lite.lite !== true) throw new Error('lite flag missing');
+      if (lite.total !== 2) throw new Error('lite must keep total');
+      if (!Array.isArray(lite.subagents) || lite.subagents.length !== 2) throw new Error('lite must keep subagent rows');
+      if ('model' in lite.subagents[0]) throw new Error('lite subagent must drop model');
+      if (lite.subagents[0].title !== '后台任务A' || lite.subagents[0].kind !== '后台任务' || lite.subagents[0].running !== true) {
+        throw new Error('lite subagent must keep title/kind/running');
+      }
+      if (lite.subagents[1].role !== 'teammate' || lite.subagents[1].mode !== 'team') {
+        throw new Error('lite subagent must keep role/mode for badge');
+      }
+      if (!Array.isArray(lite.tasks) || lite.tasks.length !== 2) throw new Error('lite must keep task rows');
+      const t1 = lite.tasks[0];
+      if (t1.subject !== '说明' || t1.status !== 'in_progress' || t1.ownerName !== 'alice' || t1.revision !== 3) {
+        throw new Error('lite task must keep subject/status/ownerName/revision');
+      }
+      if ('description' in t1 || 'blockedBy' in t1 || 'writeScopes' in t1) {
+        throw new Error('lite task must drop description/blockedBy/writeScopes for on-demand detail');
+      }
+      if ('revision' in lite.tasks[1]) throw new Error('absent revision must not be synthesized');
+      // 幂等：不污染入参（拷贝语义）
+      if (full.subagents[0].model !== 'deepseek-v4-flash') throw new Error('lite must not mutate input');
+      return { liteRowsKept: lite.subagents.length, liteTasksKept: lite.tasks.length, liteMapped: true };
+    });
+
+    // 7c. /api/session/subagents lite=1 双路径契约（含分页组合）
+    // （会话/工作区路径在 mock 下子智能体为空，重点校验标记、数字 total 与结构不破）
+    await runner.run('Subagents endpoint lite=1 envelope contract', async () => {
+      const currentCwd = process.cwd();
+      const resLite = await httpRequest(`/api/session/subagents?cwd=${encodeURIComponent(currentCwd)}&lite=1`);
+      if (resLite.status !== 200 || resLite.body.lite !== true) {
+        throw new Error(`Expected lite flag, got ${resLite.status} ${JSON.stringify(resLite.body)}`);
+      }
+      if (!Array.isArray(resLite.body.subagents) || typeof resLite.body.total !== 'number') {
+        throw new Error('lite envelope must keep subagents array + numeric total');
+      }
+      const resLiteParent = await httpRequest(`/api/session/subagents?cwd=${encodeURIComponent(currentCwd)}&id=session-a450a460-601e-4f2f-af3c-17177b36d02d&lite=1&limit=1&offset=0`);
+      if (resLiteParent.status !== 200 || resLiteParent.body.lite !== true) {
+        throw new Error(`Expected lite flag on paged parent call, got ${resLiteParent.status}`);
+      }
+      if (!resLiteParent.body.page || resLiteParent.body.page.limit !== 1) {
+        throw new Error('lite paged call must keep page echo');
+      }
+      const resFull = await httpRequest(`/api/session/subagents?cwd=${encodeURIComponent(currentCwd)}&lite=0`);
+      if (resFull.status !== 200 || resFull.body.lite !== undefined) {
+        throw new Error('lite=0 must stay full (no lite flag)');
+      }
+      return { liteEnvelope: true, litePagedEnvelope: true, fullUnaffected: true };
+    });
+
     // 13. [UNIT] Session FSM & Tail Status Text Sanitization Contract
     await runner.run('Session FSM & Tail Status Text Sanitization Contract', async () => {
       const html = fs.readFileSync(path.join(__dirname, 'static/index.html'), 'utf8');
@@ -2093,6 +2159,23 @@ async function main() {
       }
       if (!html.includes('task-detail-overlay')) {
         throw new Error('Missing task-detail-overlay in static/index.html');
+      }
+      // 懒加载看板：列表（lite=1）快载标题，任务详情按需拉取（fetchTaskDetail + __full 回写）
+      if (!html.includes('&offset=0&lite=1')) {
+        throw new Error('Subagent board loaders must request lite=1 for lazy title list');
+      }
+      if (!html.includes('function fetchTaskDetail(task)')) {
+        throw new Error('Missing fetchTaskDetail lazy detail loader in static/index.html');
+      }
+      if (!html.includes("task.description === undefined && !task.__full")) {
+        throw new Error('openTaskDetail must lazy-fetch lite tasks lacking description');
+      }
+      // 空响应容错：旧 WebKit 对空串 JSON.parse 报 "unexpected EOF"，必须先拦截给可读提示
+      if (!html.includes('网络中断或云端超时（空响应），请按 U 重试')) {
+        throw new Error('Missing empty-response guard message for subagents board');
+      }
+      if (!html.includes("txt = xhr.responseText || '';")) {
+        throw new Error('Missing responseText empty-guard in subagents loaders');
       }
       if (!html.includes('xhr.__hasTerminalEvent = true;')) {
         throw new Error('Missing __hasTerminalEvent latch in attachSession');

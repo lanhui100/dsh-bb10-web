@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { createStreamFold } from './lib/stream-fold.mjs';
 import { createSessionEventHandler as createSessionEventHandlerImpl } from './lib/session-events.mjs';
 import { classifyQuestionFrame } from './lib/ask-ownership.mjs';
+import { applySubagentLite } from './lib/subagent-lite.mjs';
 import {
   extractEventUsage,
   createUsageFold,
@@ -945,8 +946,54 @@ async function checkDshHostAlive(force = false) {
 }
 
 /**
+ * 宿主 session/list 全量 items 的短缓存 + In-Flight 单飞复用。
+ *
+ * 背景（对齐 dsh web 协议事实 + BB10 慢链路实测）：宿主 session/list RPC 体积大
+ * （2.4MB 级），慢链路下耗时可到 6~16s。/api/session/subagents（按 U 打开多智能体
+ * 看板）与 /api/sessions 等消费方共享同一次 RPC，避免每次开看板都重新向宿主拉全量，
+ * 这是看板“先显标题再显详情”懒加载的带宽与延迟前提。
+ */
+const HOST_LIST_FULL_TTL_MS = 8000;
+let hostSessionListFullCache = { items: null, at: 0 };
+let hostSessionListFullInflight = null;
+
+/**
+ * 获取宿主 session/list 完整 items；宿主不可达或 RPC 失败返回 null（调用方降级为空列表）。
+ * - 非 mock 模式：短缓存 + 单飞复用；force=true 穿透缓存（在途请求照常合并）。
+ * - mock 模式：不做缓存，保证测试期间宿主状态变化即时可见。
+ */
+async function fetchHostSessionListFull(force = false) {
+  if (Q20_MOCK_HOST) {
+    const rpcRes = await callDshWebRpc('session/list', { _request: {} }, 6000, { rawArgs: true });
+    return (rpcRes.ok && rpcRes.value && Array.isArray(rpcRes.value.items)) ? rpcRes.value.items : null;
+  }
+  const now = Date.now();
+  if (!force && hostSessionListFullCache.items !== null && (now - hostSessionListFullCache.at < HOST_LIST_FULL_TTL_MS)) {
+    return hostSessionListFullCache.items;
+  }
+  if (hostSessionListFullInflight) {
+    return hostSessionListFullInflight;
+  }
+  hostSessionListFullInflight = (async () => {
+    try {
+      const result = await callDshWebRpc('session/list', { _request: {} }, 6000, { rawArgs: true });
+      let items = null;
+      if (result.ok && result.value && Array.isArray(result.value.items)) {
+        items = result.value.items;
+        hostSessionListFullCache = { items, at: Date.now() };
+      }
+      return items;
+    } finally {
+      hostSessionListFullInflight = null;
+    }
+  })();
+  return hostSessionListFullInflight;
+}
+
+/**
  * 统一获取宿主 session/list 的全量数据（合并 running 与 title 提取，带 In-Flight 单飞复用）。
  * 避免 getHostTitleMap 与 getHostRunningSessionIds 分别发起庞大的 2.4MB RPC。
+ * 原始 items 复用 fetchHostSessionListFull 的共享缓存与单飞，两路消费只触发一次 RPC。
  */
 async function fetchHostSessionListData(force = false) {
   const now = Date.now();
@@ -960,14 +1007,14 @@ async function fetchHostSessionListData(force = false) {
   }
   hostSessionListInflight = (async () => {
     try {
-      const result = await callDshWebRpc('session/list', { _request: {} }, 6000, { rawArgs: true });
+      const items = await fetchHostSessionListFull(force);
       const reqNow = Date.now();
       let ids = null;
       let map = null;
-      if (result.ok && result.value && Array.isArray(result.value.items)) {
-        ids = new Set(result.value.items.filter((i) => i && i.running).map((i) => String(i.sessionId)));
+      if (Array.isArray(items)) {
+        ids = new Set(items.filter((i) => i && i.running).map((i) => String(i.sessionId)));
         map = new Map();
-        for (const i of result.value.items) {
+        for (const i of items) {
           if (!i || !i.sessionId) continue;
           const t = i.title || (i.projections && i.projections.values && i.projections.values.title);
           if (typeof t === 'string' && t) map.set(String(i.sessionId), t);
@@ -4054,13 +4101,13 @@ function getSessionHistory(targetCwd, sessionId) {
 async function getSessionSubagents(targetCwd, parentSessionId) {
   if (!parentSessionId) return { parentId: parentSessionId || '', subagents: [], tasks: [] };
 
-  // 1. 读取官方 session/list RPC 权威列表
-  const rpcRes = await callDshWebRpc('session/list', { _request: {} }, 6000, { rawArgs: true });
+  // 1. 读取官方 session/list RPC 权威列表（共享单飞 + 短缓存：开看板不再重发 2.4MB RPC，
+  //    实测慢链路单独超时在 6s 左右、全量解析需 9~16s，是看板加载失败的延迟主因）
+  const items = await fetchHostSessionListFull();
 
-  if (!rpcRes.ok || !rpcRes.value || !Array.isArray(rpcRes.value.items)) {
+  if (!Array.isArray(items)) {
     return { parentId: parentSessionId, subagents: [], tasks: [] };
   }
-  const items = rpcRes.value.items;
   const parent = items.find(s => s && s.sessionId === parentSessionId);
   const catalog = (parent && parent.projections && parent.projections.values && Array.isArray(parent.projections.values.subagentCatalog))
     ? parent.projections.values.subagentCatalog
@@ -4161,11 +4208,10 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
  * 汇总当前工作区内所有带子智能体关系的会话概览，或全局子任务列表。
  */
 async function getWorkspaceSubagents(targetCwd) {
-  const rpcRes = await callDshWebRpc('session/list', { _request: {} }, 6000, { rawArgs: true });
-  if (!rpcRes.ok || !rpcRes.value || !Array.isArray(rpcRes.value.items)) {
+  const items = await fetchHostSessionListFull();
+  if (!Array.isArray(items)) {
     return { cwd: targetCwd, subagents: [], tasks: [] };
   }
-  const items = rpcRes.value.items;
   const normalizedCwd = targetCwd ? path.resolve(targetCwd) : '';
   const subagents = [];
 
@@ -5429,6 +5475,7 @@ const server = http.createServer((req, res) => {
       const offsetRaw = parseInt(searchParams.get('offset') || '', 10);
       const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 0;
       const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+      const lite = searchParams.get('lite') === '1' || searchParams.get('lite') === 'true';
       const data = id
         ? await getSessionSubagents(cwd, id)
         : await getWorkspaceSubagents(cwd);
@@ -5440,6 +5487,12 @@ const server = http.createServer((req, res) => {
         data.page = { limit, offset, total };
       } else if (typeof data.total !== 'number') {
         data.total = Array.isArray(data.subagents) ? data.subagents.length : 0;
+      }
+      // 懒加载精简：lite=1 只回列表所需的轻量字段（标题/徽章/状态），
+      // 任务详情（description/blockedBy/writeScopes）与子智能体 model 按需另取。
+      if (lite) {
+        sendJson(res, 200, applySubagentLite(data));
+        return;
       }
       sendJson(res, 200, data);
     } catch (err) {

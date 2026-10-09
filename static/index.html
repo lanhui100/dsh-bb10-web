@@ -3344,7 +3344,7 @@
     var taskDetailOkBtn = document.getElementById('task-detail-ok-btn');
     var isTaskDetailOpen = false;
 
-    function openTaskDetail(task) {
+    function renderTaskDetail(task) {
       if (!task || !taskDetailOverlay) return;
       isTaskDetailOpen = true;
       if (taskDetailTitle) {
@@ -3372,6 +3372,84 @@
         taskDetailContent.innerHTML = h;
       }
       taskDetailOverlay.style.display = 'block';
+    }
+
+    // 懒加载任务详情：看板列表（lite）只带标题/状态等轻量字段，点击任务行时先出加载态，
+    // 再按需拉取全量详情（description/blockedBy/writeScopes），成功后回写缓存避免重复请求。
+    function fetchTaskDetail(task) {
+      if (!task || !task.id || !taskDetailOverlay) return;
+      isTaskDetailOpen = true;
+      if (taskDetailTitle) {
+        taskDetailTitle.innerHTML = '📋 ' + escapeHtml(task.subject || task.id || '任务详情');
+      }
+      if (taskDetailContent) {
+        taskDetailContent.innerHTML = '<div style="color: #888888; padding: 8px 4px;">正在加载任务详情…</div>';
+      }
+      taskDetailOverlay.style.display = 'block';
+      var ctx = getSubagentTargetContext();
+      var cacheKey = (ctx.cwd || '') + '::' + (ctx.sid || '');
+      var cacheData = subagentCache[cacheKey];
+      // 工作区兜底视图（fallback）的任务来自全工作区各团队：详情按工作区口径（不带 id）重取；
+      // 会话视图按父会话 id 重取。均命中服务端 8s 共享缓存，几乎瞬时。
+      var parentId = (cacheData && cacheData.fallback) ? '' : ((cacheData && cacheData.parentId) || ctx.sid || '');
+      var url = '/api/session/subagents?cwd=' + encodeURIComponent(ctx.cwd || '');
+      if (parentId) {
+        url += '&id=' + encodeURIComponent(parentId);
+      }
+      url += '&lite=0';
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', url, true);
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState !== 4) return;
+        var status = 0;
+        try { status = xhr.status; } catch (e) {}
+        if (status !== 200 && status !== 0) {
+          renderTaskDetail(task);
+          return;
+        }
+        var txt = '';
+        try { txt = xhr.responseText || ''; } catch (eTxt) {}
+        if (!txt.replace(/^\s+|\s+$/g, '')) {
+          renderTaskDetail(task);
+          return;
+        }
+        var data = null;
+        try { data = JSON.parse(txt); } catch (eJson) { renderTaskDetail(task); return; }
+        var tasks = (data && Array.isArray(data.tasks)) ? data.tasks : [];
+        var found = null;
+        for (var i = 0; i < tasks.length; i++) {
+          if (tasks[i] && tasks[i].id === task.id) {
+            found = tasks[i];
+            break;
+          }
+        }
+        if (!found) {
+          renderTaskDetail(task);
+          return;
+        }
+        // 标记全量并回写看板缓存：同会话内再点该任务直接命中，不再重复请求
+        found.__full = true;
+        if (cacheData && Array.isArray(cacheData.tasks)) {
+          for (var j = 0; j < cacheData.tasks.length; j++) {
+            if (cacheData.tasks[j] && cacheData.tasks[j].id === task.id) {
+              cacheData.tasks[j] = found;
+              break;
+            }
+          }
+        }
+        renderTaskDetail(found);
+      };
+      try { xhr.send(); } catch (eSend) { renderTaskDetail(task); }
+    }
+
+    function openTaskDetail(task) {
+      if (!task || !taskDetailOverlay) return;
+      // lite 列表行缺少 description 字段：走按需详情拉取（懒加载）；已有全量直接渲染
+      if (task.description === undefined && !task.__full && task.id) {
+        fetchTaskDetail(task);
+        return;
+      }
+      renderTaskDetail(task);
     }
 
     function closeTaskDetail() {
@@ -6993,7 +7071,8 @@
       if (sid) {
         url += '&id=' + encodeURIComponent(sid);
       }
-      url += '&limit=' + subagentPageSize + '&offset=0';
+      // 懒加载：列表先回轻量标题/徽章/状态（lite=1），任务详情点击后再按需拉取
+      url += '&limit=' + subagentPageSize + '&offset=0&lite=1';
 
       var xhr = new XMLHttpRequest();
       xhr.open('GET', url, true);
@@ -7004,7 +7083,14 @@
           try { status = xhr.status; } catch (e) {}
           if (status === 200 || status === 0) {
             try {
-              var data = JSON.parse(xhr.responseText);
+              var txt = '';
+              try { txt = xhr.responseText || ''; } catch (eTxt) {}
+              // 空响应（网络中断/云端超时连接被截断）：旧 WebKit 对空串 JSON.parse
+              // 报 "JSON parse error: unexpected EOF"，此处先给可读提示 + 重试路径
+              if (!txt.replace(/^\s+|\s+$/g, '')) {
+                throw new Error('网络中断或云端超时（空响应），请按 U 重试');
+              }
+              var data = JSON.parse(txt);
               var list = data.subagents || data;
               var tasks = data.tasks || [];
               var isEmpty = (!list || list.length === 0) && (!tasks || tasks.length === 0);
@@ -7053,7 +7139,7 @@
       if (sid) {
         url += '&id=' + encodeURIComponent(sid);
       }
-      url += '&limit=' + (limit || subagentPageSize) + '&offset=' + (offset || 0);
+      url += '&limit=' + (limit || subagentPageSize) + '&offset=' + (offset || 0) + '&lite=1';
       var xhr = new XMLHttpRequest();
       xhr.open('GET', url, true);
       xhr.onreadystatechange = function() {
@@ -7063,7 +7149,13 @@
           try { status = xhr.status; } catch (e) {}
           if (status === 200 || status === 0) {
             try {
-              var data = JSON.parse(xhr.responseText);
+              var txt = '';
+              try { txt = xhr.responseText || ''; } catch (eTxt) {}
+              if (!txt.replace(/^\s+|\s+$/g, '')) {
+                // 空响应：保留既有缓存，不破坏当前看板
+                return;
+              }
+              var data = JSON.parse(txt);
               var prev = subagentCache[cacheKey];
               var prevList = (prev && (prev.subagents || prev)) || [];
               var pageList = data.subagents || [];
@@ -7089,7 +7181,7 @@
 
     function loadWorkspaceSubagentsFallback(cwd, cacheKey, parentSeq) {
       var mySeq = (typeof parentSeq === 'number') ? parentSeq : (++subagentReqSeq);
-      var url = '/api/session/subagents?cwd=' + encodeURIComponent(cwd) + '&limit=' + subagentPageSize + '&offset=0';
+      var url = '/api/session/subagents?cwd=' + encodeURIComponent(cwd) + '&limit=' + subagentPageSize + '&offset=0&lite=1';
       var xhr = new XMLHttpRequest();
       xhr.open('GET', url, true);
       xhr.onreadystatechange = function() {
@@ -7100,7 +7192,13 @@
           try { status = xhr.status; } catch (e) {}
           if (status === 200 || status === 0) {
             try {
-              var data = JSON.parse(xhr.responseText);
+              var txt = '';
+              try { txt = xhr.responseText || ''; } catch (eTxt) {}
+              // 空响应：旧 WebKit JSON.parse('') 报 "unexpected EOF"，此处给可读错误节点
+              if (!txt.replace(/^\s+|\s+$/g, '')) {
+                throw new Error('网络中断或云端超时（空响应），请按 U 重试');
+              }
+              var data = JSON.parse(txt);
               data.fallback = true;
               var wsSubs = data.subagents || [];
               var wsTasks = data.tasks || [];
