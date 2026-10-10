@@ -6912,11 +6912,12 @@
       var isFallbackView = !!(cacheData && cacheData.fallback);
       var totalHint = (cacheData && cacheData.total) || (list ? list.length : 0);
 
+      var effectiveSid = (cacheData && cacheData.parentId) || sid;
       if (subagentPanelTitle) {
         if (isFallbackView) {
           subagentPanelTitle.innerHTML = '👥 多智能体 · 工作区全部';
         } else {
-          subagentPanelTitle.innerHTML = '👥 多智能体 · ' + (sid ? escapeHtml(sid.substring(0, 10)) : '工作区任务');
+          subagentPanelTitle.innerHTML = '👥 多智能体 · ' + (effectiveSid ? escapeHtml(effectiveSid.substring(0, 10)) : '工作区任务');
         }
       }
 
@@ -7206,14 +7207,14 @@
               // 说明当前项目当前并无运行中的子智能体，不应将旧会话的历史记录强塞给当前会话
               var hasActive = false;
               for (var i = 0; i < wsSubs.length; i++) {
-                if (wsSubs[i].running || wsSubs[i].isRunning || wsSubs[i].state === 'running') {
+                if (wsSubs[i].running || wsSubs[i].isRunning || wsSubs[i].state === 'running' || wsSubs[i].status === 'running' || wsSubs[i].status === 'active') {
                   hasActive = true;
                   break;
                 }
               }
               if (!hasActive) {
                 for (var j = 0; j < wsTasks.length; j++) {
-                  if (wsTasks[j].status === 'in_progress') {
+                  if (wsTasks[j].status === 'in_progress' || wsTasks[j].status === 'running' || wsTasks[j].status === 'active') {
                     hasActive = true;
                     break;
                   }

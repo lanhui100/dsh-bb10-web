@@ -4108,7 +4108,34 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
   if (!Array.isArray(items)) {
     return { parentId: parentSessionId, subagents: [], tasks: [] };
   }
-  const parent = items.find(s => s && s.sessionId === parentSessionId);
+
+  // 智能解析有效父会话：若传入的 parentSessionId 本身是 teammate/子智能体（带有 parentSessionId 或被其他 session 登记为 teammate），
+  // 则自动追溯到它的根/主会话，确保在子智能体会话中按 U 也能完整看到整个团队与任务板！
+  let effectiveParentId = parentSessionId;
+  const initialSession = items.find(s => s && s.sessionId === parentSessionId);
+  if (initialSession && initialSession.parentSessionId) {
+    effectiveParentId = initialSession.parentSessionId;
+  } else {
+    // 检查是否有其他会话将当前 session 纳入其 agentTeam.members (role === 'teammate') 或 subagentCatalog
+    const owningParent = items.find(s => {
+      if (!s || s.sessionId === parentSessionId) return false;
+      const proj = (s.projections && s.projections.values) || {};
+      const team = proj.agentTeam;
+      if (team && Array.isArray(team.members) && team.members.some(m => m && m.id === parentSessionId && m.role === 'teammate')) {
+        return true;
+      }
+      const cat = proj.subagentCatalog;
+      if (Array.isArray(cat) && cat.some(c => c && c.id === parentSessionId)) {
+        return true;
+      }
+      return false;
+    });
+    if (owningParent && owningParent.sessionId) {
+      effectiveParentId = owningParent.sessionId;
+    }
+  }
+
+  const parent = items.find(s => s && s.sessionId === effectiveParentId);
   const catalog = (parent && parent.projections && parent.projections.values && Array.isArray(parent.projections.values.subagentCatalog))
     ? parent.projections.values.subagentCatalog
     : [];
@@ -4123,8 +4150,8 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
   }
 
   const children = items.filter(s => {
-    if (!s || s.sessionId === parentSessionId) return false;
-    if (s.parentSessionId === parentSessionId) return true;
+    if (!s || s.sessionId === effectiveParentId) return false;
+    if (s.parentSessionId === effectiveParentId) return true;
     if (teammateMap.has(s.sessionId)) return true;
     return catalog.some(c => c && c.id === s.sessionId);
   });
@@ -4152,7 +4179,7 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
 
     return {
       id: ch.sessionId,
-      parentId: parentSessionId,
+      parentId: effectiveParentId,
       title: title,
       label: label,
       name: teamMember ? teamMember.name : '',
@@ -4176,7 +4203,7 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
       const isRunning = m.status === 'running' || m.phase === 'active';
       subagents.push({
         id: m.id,
-        parentId: parentSessionId,
+        parentId: effectiveParentId,
         title: m.name + (m.description ? ' (' + m.description + ')' : ''),
         label: m.name,
         name: m.name,
@@ -4201,7 +4228,7 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
     if (br !== ar) return br - ar;
     return (b.updatedAt || 0) - (a.updatedAt || 0);
   });
-  return { parentId: parentSessionId, subagents, tasks: teamTasks, total: subagents.length };
+  return { parentId: effectiveParentId, subagents, tasks: teamTasks, total: subagents.length };
 }
 
 /**
@@ -4215,6 +4242,12 @@ async function getWorkspaceSubagents(targetCwd) {
   const normalizedCwd = targetCwd ? path.resolve(targetCwd) : '';
   const subagents = [];
 
+  // 1. 构建全量 session 快速索引以补全 teammate 成员详情
+  const sessionById = new Map();
+  for (const s of items) {
+    if (s && s.sessionId) sessionById.set(s.sessionId, s);
+  }
+
   for (const ch of items) {
     if (!ch) continue;
     const isSub = ch.origin === 'subagent' || !!ch.parentSessionId;
@@ -4223,28 +4256,41 @@ async function getWorkspaceSubagents(targetCwd) {
 
     const proj = (ch.projections && ch.projections.values) || {};
     const subMeta = proj.subagent || {};
-    const isTeamMember = (ch.role === 'teammate') || (subMeta.mode === 'team') || (proj.agentTeam && Array.isArray(proj.agentTeam.members));
+
+    // 检查父级 session 中是否有该 member 的精准命名/角色
+    let parentTeamMember = null;
+    if (ch.parentSessionId && sessionById.has(ch.parentSessionId)) {
+      const pSession = sessionById.get(ch.parentSessionId);
+      const pTeam = pSession.projections && pSession.projections.values && pSession.projections.values.agentTeam;
+      if (pTeam && Array.isArray(pTeam.members)) {
+        parentTeamMember = pTeam.members.find(m => m && m.id === ch.sessionId);
+      }
+    }
+
+    const isTeamMember = (ch.role === 'teammate') || (subMeta.mode === 'team') || (proj.agentTeam && Array.isArray(proj.agentTeam.members)) || (parentTeamMember && parentTeamMember.role === 'teammate');
     const mode = isTeamMember ? 'team' : (subMeta.mode || (ch.origin === 'subagent' ? 'subagent' : 'task'));
     let kind = '子Agent';
     if (mode === 'one-shot') kind = '后台任务';
     else if (mode === 'team' || proj.agentPreset === 'agent-team' || isTeamMember) kind = 'Agent Team';
 
-    const label = subMeta.label || '';
-    const title = label || proj.title || ch.title || ('子任务 ' + ch.sessionId.substring(0, 8));
-    const running = !!ch.running;
-    const state = running ? 'running' : (ch.state || 'done');
+    const label = (parentTeamMember && parentTeamMember.name) || subMeta.label || '';
+    const title = (parentTeamMember && (parentTeamMember.name + (parentTeamMember.description ? ' (' + parentTeamMember.description + ')' : ''))) || label || proj.title || ch.title || ('子任务 ' + ch.sessionId.substring(0, 8));
+    const running = (parentTeamMember && (parentTeamMember.status === 'running' || parentTeamMember.phase === 'active')) || !!ch.running;
+    const state = (parentTeamMember && ((parentTeamMember.status === 'running' || parentTeamMember.phase === 'active') ? 'running' : (parentTeamMember.status === 'failed' ? 'failed' : 'done'))) || (running ? 'running' : (ch.state || 'done'));
 
     subagents.push({
       id: ch.sessionId,
       parentId: ch.parentSessionId || '',
       title: title,
       label: label,
+      name: parentTeamMember ? parentTeamMember.name : '',
+      role: parentTeamMember ? parentTeamMember.role : (isTeamMember ? 'teammate' : 'subagent'),
       mode: mode,
       kind: kind,
       running: running,
       isRunning: running,
       state: state,
-      status: state,
+      status: (parentTeamMember && (parentTeamMember.status || parentTeamMember.phase)) || state,
       updatedAt: ch.updatedAt || 0,
       cwd: ch.cwd || targetCwd,
     });
@@ -4258,6 +4304,69 @@ async function getWorkspaceSubagents(targetCwd) {
     const p = (s.projections && s.projections.values) || {};
     if (p.agentTeam && Array.isArray(p.agentTeam.tasks) && p.agentTeam.tasks.length > 0) {
       teamTasks = teamTasks.concat(p.agentTeam.tasks);
+    }
+  }
+
+  // 跨会话活跃感知兜底（针对多工作区/多智能体并发）：
+  // 若当前工作区无任何运行中的子智能体，但整个宿主中有正在运行的子智能体或团队任务，
+  // 补充包含这些活跃的跨工作区任务与智能体，避免用户在切到新项目或多项目开发时按 U 发生"明明正在跑却显示无"
+  if (!subagents.some(s => s.running) && !teamTasks.some(t => t.status === 'in_progress')) {
+    for (const ch of items) {
+      if (!ch) continue;
+      const isSub = ch.origin === 'subagent' || !!ch.parentSessionId;
+      if (!isSub) continue;
+      // 仅补充正在运行的跨工作区任务
+      if (!ch.running) continue;
+      if (subagents.some(s => s.id === ch.sessionId)) continue;
+
+      const proj = (ch.projections && ch.projections.values) || {};
+      const subMeta = proj.subagent || {};
+      let parentTeamMember = null;
+      if (ch.parentSessionId && sessionById.has(ch.parentSessionId)) {
+        const pSession = sessionById.get(ch.parentSessionId);
+        const pTeam = pSession.projections && pSession.projections.values && pSession.projections.values.agentTeam;
+        if (pTeam && Array.isArray(pTeam.members)) {
+          parentTeamMember = pTeam.members.find(m => m && m.id === ch.sessionId);
+        }
+      }
+      const isTeamMember = (ch.role === 'teammate') || (subMeta.mode === 'team') || (proj.agentTeam && Array.isArray(proj.agentTeam.members)) || (parentTeamMember && parentTeamMember.role === 'teammate');
+      const mode = isTeamMember ? 'team' : (subMeta.mode || (ch.origin === 'subagent' ? 'subagent' : 'task'));
+      let kind = '子Agent';
+      if (mode === 'one-shot') kind = '后台任务';
+      else if (mode === 'team' || proj.agentPreset === 'agent-team' || isTeamMember) kind = 'Agent Team';
+
+      const label = (parentTeamMember && parentTeamMember.name) || subMeta.label || '';
+      const title = (parentTeamMember && (parentTeamMember.name + (parentTeamMember.description ? ' (' + parentTeamMember.description + ')' : ''))) || label || proj.title || ch.title || ('子任务 ' + ch.sessionId.substring(0, 8));
+
+      subagents.push({
+        id: ch.sessionId,
+        parentId: ch.parentSessionId || '',
+        title: title,
+        label: label,
+        name: parentTeamMember ? parentTeamMember.name : '',
+        role: parentTeamMember ? parentTeamMember.role : (isTeamMember ? 'teammate' : 'subagent'),
+        mode: mode,
+        kind: kind,
+        running: true,
+        isRunning: true,
+        state: 'running',
+        status: (parentTeamMember && (parentTeamMember.status || parentTeamMember.phase)) || 'running',
+        updatedAt: ch.updatedAt || 0,
+        cwd: ch.cwd || targetCwd,
+      });
+    }
+
+    // 同样补充正在运行的跨工作区团队任务
+    for (const s of items) {
+      if (!s) continue;
+      const p = (s.projections && s.projections.values) || {};
+      if (p.agentTeam && Array.isArray(p.agentTeam.tasks) && p.agentTeam.tasks.length > 0) {
+        for (const t of p.agentTeam.tasks) {
+          if (t && t.status === 'in_progress' && !teamTasks.some(existing => existing.id === t.id)) {
+            teamTasks.push(t);
+          }
+        }
+      }
     }
   }
 

@@ -2045,6 +2045,22 @@ async function main() {
         }
       }
 
+      // Check teammate session reverse traceability:
+      // When id is a teammate/child session id, getSessionSubagents must resolve to parent session
+      if (resParent.body.subagents.length > 0) {
+        const firstChildId = resParent.body.subagents[0].id;
+        const resChild = await httpRequest(`/api/session/subagents?cwd=${encodeURIComponent(currentCwd)}&id=${encodeURIComponent(firstChildId)}`);
+        if (resChild.status !== 200 || !resChild.body || !Array.isArray(resChild.body.subagents)) {
+          throw new Error(`Expected 200 array for child teammate query, got ${resChild.status}`);
+        }
+        if (resChild.body.parentId !== 'session-a450a460-601e-4f2f-af3c-17177b36d02d') {
+          throw new Error(`Child query must trace back to parentId, got ${resChild.body.parentId}`);
+        }
+        if (resChild.body.subagents.length !== resParent.body.subagents.length) {
+          throw new Error(`Child query must return entire teammate roster, got ${resChild.body.subagents.length} vs ${resParent.body.subagents.length}`);
+        }
+      }
+
       // 分页契约：limit/offset 切片 + total 恒返（缺省全量向后兼容）
       if (typeof resAll.body.total !== 'number') {
         throw new Error('Missing numeric total in /api/session/subagents response');
