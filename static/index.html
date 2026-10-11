@@ -6965,10 +6965,12 @@
           })(tasks[k]);
         }
 
-        var memberGroup = document.createElement('div');
-        memberGroup.className = 'tree-group';
-        memberGroup.innerHTML = '👥 团队与子智能体成员 (' + totalHint + ')';
-        pushNode(memberGroup, { el: memberGroup, kind: 'noop' });
+        if (list && list.length > 0) {
+          var memberGroup = document.createElement('div');
+          memberGroup.className = 'tree-group';
+          memberGroup.innerHTML = '👥 团队与子智能体成员 (' + totalHint + ')';
+          pushNode(memberGroup, { el: memberGroup, kind: 'noop' });
+        }
       }
 
       // 分页窗口：首屏只渲染 subagentShownCount 条，余下走 [加载更多]。
@@ -7220,8 +7222,9 @@
                   }
                 }
               }
-              if (!hasActive) {
-                // 无活跃运行中智能体，清空避免误加载其他历史会话的子智能体
+              // 唯有当既无活跃运行项，且工作区内也完全没有任何团队任务或子智能体记录时，才置空数据。
+              // 若存在团队任务或子智能体，必须完整保留并在面板中一同显示！
+              if (!hasActive && wsTasks.length === 0 && wsSubs.length === 0) {
                 data.subagents = [];
                 data.tasks = [];
                 data.total = 0;
