@@ -7097,12 +7097,7 @@
               var list = data.subagents || data;
               var tasks = data.tasks || [];
               var isEmpty = (!list || list.length === 0) && (!tasks || tasks.length === 0);
-              // 仅当当前会话确实无子智能体，且工作区存在运行中的子智能体时，才展示工作区看板；
-              // 若工作区只有其他会话的历史已完成子智能体，禁止串台展示。
-              if (isEmpty && sid) {
-                loadWorkspaceSubagentsFallback(cwd, cacheKey, mySeq);
-                return;
-              }
+              // 严格隔离：会话视图按 U 仅展示当前会话（及其团队/子智能体），不跨会话回退拉取工作区，彻底杜绝串台展示其他会话的任务与智能体
               subagentLoading = false;
               subagentCache[cacheKey] = data;
               try { subagentLastFetchAt[cacheKey] = (new Date()).getTime(); } catch (eTs) {}
@@ -7183,74 +7178,9 @@
     }
 
     function loadWorkspaceSubagentsFallback(cwd, cacheKey, parentSeq) {
-      var mySeq = (typeof parentSeq === 'number') ? parentSeq : (++subagentReqSeq);
-      var url = '/api/session/subagents?cwd=' + encodeURIComponent(cwd) + '&limit=' + subagentPageSize + '&offset=0&lite=1';
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', url, true);
-      xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4) {
-          if (mySeq !== subagentReqSeq) return;
-          subagentLoading = false;
-          var status = 0;
-          try { status = xhr.status; } catch (e) {}
-          if (status === 200 || status === 0) {
-            try {
-              var txt = '';
-              try { txt = xhr.responseText || ''; } catch (eTxt) {}
-              // 空响应：旧 WebKit JSON.parse('') 报 "unexpected EOF"，此处给可读错误节点
-              if (!txt.replace(/^\s+|\s+$/g, '')) {
-                throw new Error('网络中断或云端超时（空响应），请按 U 重试');
-              }
-              var data = JSON.parse(txt);
-              data.fallback = true;
-              var wsSubs = data.subagents || [];
-              var wsTasks = data.tasks || [];
-              // 严格防串台：如果工作区返回的都是历史已完成/非活跃子智能体，
-              // 说明当前项目当前并无运行中的子智能体，不应将旧会话的历史记录强塞给当前会话
-              var hasActive = false;
-              for (var i = 0; i < wsSubs.length; i++) {
-                if (wsSubs[i].running || wsSubs[i].isRunning || wsSubs[i].state === 'running' || wsSubs[i].status === 'running' || wsSubs[i].status === 'active') {
-                  hasActive = true;
-                  break;
-                }
-              }
-              if (!hasActive) {
-                for (var j = 0; j < wsTasks.length; j++) {
-                  if (wsTasks[j].status === 'in_progress' || wsTasks[j].status === 'running' || wsTasks[j].status === 'active') {
-                    hasActive = true;
-                    break;
-                  }
-                }
-              }
-              // 唯有当既无活跃运行项，且工作区内也完全没有任何团队任务或子智能体记录时，才置空数据。
-              // 若存在团队任务或子智能体，必须完整保留并在面板中一同显示！
-              if (!hasActive && wsTasks.length === 0 && wsSubs.length === 0) {
-                data.subagents = [];
-                data.tasks = [];
-                data.total = 0;
-              }
-              subagentCache[cacheKey] = data;
-              try { subagentLastFetchAt[cacheKey] = (new Date()).getTime(); } catch (eTs) {}
-              if (isSubagentOpen) {
-                renderSubagentTree();
-              }
-            } catch (err) {
-              if (isSubagentOpen) {
-                subagentTree.innerHTML = '';
-                var errNode = mkNode('加载失败: ' + (err.message || '格式错误'), 'tree-more', function() {});
-                subagentTree.appendChild(errNode);
-              }
-            }
-          } else {
-            if (isSubagentOpen) {
-              subagentTree.innerHTML = '';
-              var httpErrNode = mkNode('请求失败: HTTP ' + status, 'tree-more', function() {});
-              subagentTree.appendChild(httpErrNode);
-            }
-          }
-        }
-      };
-      xhr.send();
+      // 兼容历史桩：若工作区兜底被调用，data.fallback = true 供标题渲染
+      var data = {};
+      data.fallback = true;
     }
 
     function renderModelTree() {

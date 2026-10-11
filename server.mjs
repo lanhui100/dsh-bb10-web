@@ -4307,69 +4307,8 @@ async function getWorkspaceSubagents(targetCwd) {
     }
   }
 
-  // 跨会话活跃感知兜底（针对多工作区/多智能体并发）：
-  // 若当前工作区无任何运行中的子智能体，但整个宿主中有正在运行的子智能体或团队任务，
-  // 补充包含这些活跃的跨工作区任务与智能体，避免用户在切到新项目或多项目开发时按 U 发生"明明正在跑却显示无"
-  if (!subagents.some(s => s.running) && !teamTasks.some(t => t.status === 'in_progress')) {
-    for (const ch of items) {
-      if (!ch) continue;
-      const isSub = ch.origin === 'subagent' || !!ch.parentSessionId;
-      if (!isSub) continue;
-      // 仅补充正在运行的跨工作区任务
-      if (!ch.running) continue;
-      if (subagents.some(s => s.id === ch.sessionId)) continue;
-
-      const proj = (ch.projections && ch.projections.values) || {};
-      const subMeta = proj.subagent || {};
-      let parentTeamMember = null;
-      if (ch.parentSessionId && sessionById.has(ch.parentSessionId)) {
-        const pSession = sessionById.get(ch.parentSessionId);
-        const pTeam = pSession.projections && pSession.projections.values && pSession.projections.values.agentTeam;
-        if (pTeam && Array.isArray(pTeam.members)) {
-          parentTeamMember = pTeam.members.find(m => m && m.id === ch.sessionId);
-        }
-      }
-      const isTeamMember = (ch.role === 'teammate') || (subMeta.mode === 'team') || (proj.agentTeam && Array.isArray(proj.agentTeam.members)) || (parentTeamMember && parentTeamMember.role === 'teammate');
-      const mode = isTeamMember ? 'team' : (subMeta.mode || (ch.origin === 'subagent' ? 'subagent' : 'task'));
-      let kind = '子Agent';
-      if (mode === 'one-shot') kind = '后台任务';
-      else if (mode === 'team' || proj.agentPreset === 'agent-team' || isTeamMember) kind = 'Agent Team';
-
-      const label = (parentTeamMember && parentTeamMember.name) || subMeta.label || '';
-      const title = (parentTeamMember && (parentTeamMember.name + (parentTeamMember.description ? ' (' + parentTeamMember.description + ')' : ''))) || label || proj.title || ch.title || ('子任务 ' + ch.sessionId.substring(0, 8));
-
-      subagents.push({
-        id: ch.sessionId,
-        parentId: ch.parentSessionId || '',
-        title: title,
-        label: label,
-        name: parentTeamMember ? parentTeamMember.name : '',
-        role: parentTeamMember ? parentTeamMember.role : (isTeamMember ? 'teammate' : 'subagent'),
-        mode: mode,
-        kind: kind,
-        running: true,
-        isRunning: true,
-        state: 'running',
-        status: (parentTeamMember && (parentTeamMember.status || parentTeamMember.phase)) || 'running',
-        updatedAt: ch.updatedAt || 0,
-        cwd: ch.cwd || targetCwd,
-      });
-    }
-
-    // 同样补充正在运行的跨工作区团队任务
-    for (const s of items) {
-      if (!s) continue;
-      const p = (s.projections && s.projections.values) || {};
-      if (p.agentTeam && Array.isArray(p.agentTeam.tasks) && p.agentTeam.tasks.length > 0) {
-        for (const t of p.agentTeam.tasks) {
-          if (t && t.status === 'in_progress' && !teamTasks.some(existing => existing.id === t.id)) {
-            teamTasks.push(t);
-          }
-        }
-      }
-    }
-  }
-
+  // 汇总当前工作区内的子智能体与团队任务
+  // 严格隔离：仅汇总明确属于 normalizedCwd 的子智能体与团队任务，绝不跨工作区或全局越界混入其他会话的任务与智能体
   subagents.sort((a, b) => {
     const ar = a.running ? 1 : 0;
     const br = b.running ? 1 : 0;
