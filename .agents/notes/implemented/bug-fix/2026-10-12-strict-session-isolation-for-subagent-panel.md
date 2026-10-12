@@ -12,9 +12,11 @@ Status: implemented
 
 1. **废弃客户端跨会话回退拉取**：
    在 `static/index.html` 的 `loadSubagents` 中，移除对 `loadWorkspaceSubagentsFallback` 的调用；当当前会话无子智能体或团队任务时，忠实展示当前会话空态，严格恪守会话作用域隔离边界。
-2. **阻断跨工作区越界穿透**：
+2. **阻断无会话/新会话态拉取工作区历史聚合**：
+   在未建立会话或当前会话为空（`!sid`）时，`loadSubagents` 直接就绪空态缓存，阻断 `/api/session/subagents?cwd=...` 的工作区聚合调用，防止当前会话欢迎页误将全工作区历史团队目标和子智能体呈现给用户。
+3. **阻断跨工作区越界穿透**：
    在 `server.mjs` 中剔除无界限的跨工作区兜底注入，确保查询工作区时仅限当前工作区内的实体。
-3. **测试门禁与 ES5 语法规范**：
+4. **测试门禁与 ES5 语法规范**：
    全量代码严格通过 Acorn `{ ecmaVersion: 5 }` 静态语法门禁以及全套回归测试。
 
 ## Alternatives considered

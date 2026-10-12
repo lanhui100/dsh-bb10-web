@@ -6917,7 +6917,7 @@
         if (isFallbackView) {
           subagentPanelTitle.innerHTML = '👥 多智能体 · 工作区全部';
         } else {
-          subagentPanelTitle.innerHTML = '👥 多智能体 · ' + (effectiveSid ? escapeHtml(effectiveSid.substring(0, 10)) : '工作区任务');
+          subagentPanelTitle.innerHTML = '👥 多智能体 · ' + (effectiveSid ? escapeHtml(effectiveSid.substring(0, 10)) : '当前会话');
         }
       }
 
@@ -7065,9 +7065,20 @@
       var sid = ctx.sid;
       if (!cwd) return;
 
+      var cacheKey = cwd + '::' + (sid || '');
+      // 会话级强隔离：若当前为新会话/未选定会话（无 sid），不请求工作区历史聚合，直接呈现当前会话空态
+      if (!sid) {
+        subagentLoading = false;
+        subagentCache[cacheKey] = { parentId: '', subagents: [], tasks: [], total: 0 };
+        try { subagentLastFetchAt[cacheKey] = (new Date()).getTime(); } catch (eTs0) {}
+        if (isSubagentOpen) {
+          renderSubagentTree();
+        }
+        return;
+      }
+
       subagentLoading = true;
       subagentShownCount = subagentPageSize;
-      var cacheKey = cwd + '::' + (sid || '');
       var mySeq = ++subagentReqSeq;
 
       var url = '/api/session/subagents?cwd=' + encodeURIComponent(cwd);
