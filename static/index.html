@@ -1439,17 +1439,21 @@
       word-break: break-all;
     }
     .status-tail-running {
-      color: #888888;
-      -webkit-animation: tail-pulse 1.8s ease-in-out infinite;
-      animation: tail-pulse 1.8s ease-in-out infinite;
+      color: #3b82f6;
+      -webkit-animation: tail-shimmer 4s ease-in-out infinite;
+      animation: tail-shimmer 4s ease-in-out infinite;
+      background: linear-gradient(90deg, #60a5fa 0%, #ffffff 50%, #60a5fa 100%);
+      background-size: 200% 100%;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
-    @-webkit-keyframes tail-pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.35; }
+    @-webkit-keyframes tail-shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
     }
-    @keyframes tail-pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.35; }
+    @keyframes tail-shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
     }
     .status-tail-done {
       color: #777777;
@@ -8274,10 +8278,27 @@
     // 消息流最新消息下方的会话状态指示组件（对齐 dsh web 深度求索中/流光状态提示）
     var sessStatusTailEl = null;
     var lastTailHtml = '';
+    var tailTimerId = null;
+    var tailStartTime = null;
+
+    function formatTailDuration(ms) {
+      var s = Math.max(1, Math.floor(ms / 1000));
+      if (s < 60) return s + '秒';
+      var m = Math.floor(s / 60);
+      var remS = s % 60;
+      if (m < 60) return m + '分' + (remS > 0 ? remS + '秒' : '');
+      var h = Math.floor(m / 60);
+      var remM = m % 60;
+      return h + '小时' + (remM > 0 ? remM + '分' : '');
+    }
+
     function ensureSessionStatusTail() {
       if (!sessStatusTailEl) {
         sessStatusTailEl = document.createElement('div');
         sessStatusTailEl.id = 'sess-status-tail';
+        sessStatusTailEl.setAttribute('role', 'status');
+        sessStatusTailEl.setAttribute('aria-live', 'polite');
+        sessStatusTailEl.setAttribute('aria-atomic', 'true');
         // 收起的提问面板重开入口：仅 waiting + dismissed 时点击尾部状态条重开
         sessStatusTailEl.onclick = function() {
           if (typeof questionState !== 'undefined' && questionState && questionState.dismissed && questionState.questions && questionState.questions.length) {
@@ -8291,11 +8312,20 @@
       return sessStatusTailEl;
     }
 
+    function stopTailClock() {
+      if (tailTimerId) {
+        clearInterval(tailTimerId);
+        tailTimerId = null;
+      }
+      tailStartTime = null;
+    }
+
     function renderSessionStatusTail(customText) {
       // 空白新建会话无消息时不显示尾部状态指示
       if (!currentSessionId && allMessages.length === 0) {
         if (sessStatusTailEl) sessStatusTailEl.style.display = 'none';
         lastTailHtml = '';
+        stopTailClock();
         return;
       }
       var el = ensureSessionStatusTail();
@@ -8307,52 +8337,84 @@
 
       if (phase === 'running') {
         cls += 'status-tail-running';
+        if (!tailStartTime) {
+          tailStartTime = (new Date()).getTime();
+        }
+        if (!tailTimerId) {
+          tailTimerId = setInterval(function() {
+            var currEff = resolveEffectiveSessionState();
+            if (currEff.phase !== 'running') {
+              stopTailClock();
+              return;
+            }
+            if (sessStatusTailEl && sessStatusTailEl.style.display === 'block') {
+              var durStr = formatTailDuration((new Date()).getTime() - (tailStartTime || (new Date()).getTime()));
+              var actSpan = sessStatusTailEl.querySelector('.tail-action-text');
+              if (actSpan && actSpan.textContent) {
+                actSpan.textContent = actSpan.textContent.replace(/[…\.\s]+$/, '');
+              }
+              var durSpan = sessStatusTailEl.querySelector('.tail-duration-text');
+              if (durSpan) {
+                durSpan.textContent = '，用时 ' + durStr + ' ···';
+              }
+            }
+          }, 1000);
+        }
+
         // 运行中文案白名单/清洗：未完成时才区分会话的真实具体状况（调用工具、思考、生成中等）
         var rawText = customText || lastRunningActionText || '';
         var cleanText = rawText ? rawText.replace(/^[●\s]+/, '') : '';
         var isInvalidRunningText = (!cleanText || cleanText.indexOf('就绪') !== -1 || cleanText.indexOf('历史') !== -1 || cleanText.indexOf('新建') !== -1 || cleanText.indexOf('会话列表') !== -1 || cleanText.indexOf('工作区') !== -1);
         var rText = isInvalidRunningText ? '深度求索中…' : cleanText;
-        html = '<span class="status-tail-dot">●</span>' + escapeHtml(rText);
-      } else if (phase === 'stopped') {
-        cls += 'status-tail-stopped';
-        html = '<span class="status-tail-dot">■</span>会话已中止';
-      } else if (phase === 'error') {
-        // 红卡已承载详细错误时隐藏尾部，避免红卡+尾巴重复；无红卡的通用终态仍保留尾部提示
-        if (sessState.lastError || (typeof streamError !== 'undefined' && streamError)) {
-          el.style.display = 'none';
-          lastTailHtml = '';
-          return;
-        }
-        cls += 'status-tail-error';
-        var eMsg = (customText && customText.indexOf('✖') !== -1 ? customText : '') || '执行出错';
-        html = '<span class="status-tail-dot">✖</span>' + escapeHtml(eMsg);
-      } else if (phase === 'waiting') {
-        // 等待态（ask_user_question / pendingInteraction）：与会话列表头部 wait-dot 同口径，
-        // 绝不能落入 idle 显示“就绪”。面板被收起时显示可点击重开的提示文案。
-        cls += 'status-tail-waiting';
-        var wRaw = (customText && customText.replace(/^\s+|\s+$/g, '') !== '') ? customText : '等待回复…';
-        wRaw = wRaw.replace(/^[?？\s❓●]+/, '').replace(/^\s+|\s+$/g, '');
-        if (wRaw === '') wRaw = '等待回复…';
-        html = '<span class="status-tail-dot">?</span>' + escapeHtml(wRaw);
-      } else if (phase === 'done') {
-        // 完成态且存在历史消息：以图标状态为准，彻底收口完成态
-        if (allMessages.length > 0) {
-          cls += 'status-tail-done';
-          html = '<span class="status-tail-dot">✓</span>会话已完成 (' + allMessages.length + '条)';
-        } else {
-          el.style.display = 'none';
-          lastTailHtml = '';
-          return;
-        }
+        var elapsed = (new Date()).getTime() - (tailStartTime || (new Date()).getTime());
+        var hasDuration = elapsed >= 1000;
+        // 有用时展示时剥离前面的省略号，防止“深度求索中…，用时 5秒 ···”出现双重省略号
+        var displayActionText = hasDuration ? rText.replace(/[…\.\s]+$/, '') : rText;
+        var durationText = hasDuration ? ('，用时 ' + formatTailDuration(elapsed) + ' ···') : '';
+        html = '<span class="status-tail-dot">●</span><span class="tail-action-text">' + escapeHtml(displayActionText) + '</span><span class="tail-duration-text">' + escapeHtml(durationText) + '</span>';
       } else {
-        // idle
-        if (allMessages.length > 0) {
-          cls += 'status-tail-done';
-          html = '<span class="status-tail-dot">·</span>就绪';
+        stopTailClock();
+        if (phase === 'stopped') {
+          cls += 'status-tail-stopped';
+          html = '<span class="status-tail-dot">■</span>会话已中止';
+        } else if (phase === 'error') {
+          // 红卡已承载详细错误时隐藏尾部，避免红卡+尾巴重复；无红卡的通用终态仍保留尾部提示
+          if (sessState.lastError || (typeof streamError !== 'undefined' && streamError)) {
+            el.style.display = 'none';
+            lastTailHtml = '';
+            return;
+          }
+          cls += 'status-tail-error';
+          var eMsg = (customText && customText.indexOf('✖') !== -1 ? customText : '') || '执行出错';
+          html = '<span class="status-tail-dot">✖</span>' + escapeHtml(eMsg);
+        } else if (phase === 'waiting') {
+          // 等待态（ask_user_question / pendingInteraction）：与会话列表头部 wait-dot 同口径，
+          // 绝不能落入 idle 显示“就绪”。面板被收起时显示可点击重开的提示文案。
+          cls += 'status-tail-waiting';
+          var wRaw = (customText && customText.replace(/^\s+|\s+$/g, '') !== '') ? customText : '等待回复…';
+          wRaw = wRaw.replace(/^[?？\s❓●]+/, '').replace(/^\s+|\s+$/g, '');
+          if (wRaw === '') wRaw = '等待回复…';
+          html = '<span class="status-tail-dot">?</span>' + escapeHtml(wRaw);
+        } else if (phase === 'done') {
+          // 完成态且存在历史消息：以图标状态为准，彻底收口完成态
+          if (allMessages.length > 0) {
+            cls += 'status-tail-done';
+            html = '<span class="status-tail-dot">✓</span>会话已完成 (' + allMessages.length + '条)';
+          } else {
+            el.style.display = 'none';
+            lastTailHtml = '';
+            return;
+          }
         } else {
-          el.style.display = 'none';
-          lastTailHtml = '';
-          return;
+          // idle
+          if (allMessages.length > 0) {
+            cls += 'status-tail-done';
+            html = '<span class="status-tail-dot">·</span>就绪';
+          } else {
+            el.style.display = 'none';
+            lastTailHtml = '';
+            return;
+          }
         }
       }
 
