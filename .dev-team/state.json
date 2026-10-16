@@ -35,8 +35,8 @@
       "red_tag": "wave-2026-10-16-red",
       "contract_commit": "61675f5",
       "contract": ".dev-team/contract-wave-2026-10-16.md",
-      "green_commit": null,
-      "status": "in_progress",
+      "green_commit": "e084a61",
+      "status": "completed",
       "quarantine": null,
       "nfr_degraded": [],
       "write_scopes": {
@@ -94,6 +94,17 @@
           "window_start": "2026-10-16T17:04+08:00",
           "reason": "protect host waterfall settlement (L3-B F1)"
         }
+      },
+      "green_tag": "wave-2026-10-16",
+      "docs_commit": "de1c18f",
+      "gates": {
+        "es5": "PASS",
+        "node_check": "exit 0",
+        "acceptance_run_all": "suites=3 failed=0 exit 0 (A1-A10, 11 cases)",
+        "test_decoupling": "PASS exit 0",
+        "test_unit": "35/35 exit 0",
+        "test_suite": "7/7 exit 0",
+        "browser_e2e": "A9-C/A9-U pass=2 fail=0 ConsoleError=0 + screenshots"
       }
     }
   ]
