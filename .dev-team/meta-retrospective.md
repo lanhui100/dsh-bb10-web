@@ -1,3 +1,24 @@
+# Meta Retrospective — 语音消息文件处理优化与异常修复 (2026-10-16)
+
+## 一、通信拓扑与信噪比 (Topology & Noise)
+- **团队协作与状态机推进**：按 Dev Team 拓扑编排（task-1 诊断规划 → task-2 红相测试编写 → task-3 实施与修复 → task-4 全量门禁校验与收口）。
+- **零废话与数据驱动**：直击关键因果（沙漏替换、跨工作区会话一致性、多模态音频转录能力与降级），全链路自动化脚本输出物理收据。
+
+## 二、门禁穿透与误杀率 (Gate Penetration / False Negatives & Positives)
+- **红绿双相防伪线**：独立验收用例 `tests/acceptance/voice-upload-skill.test.mjs` 在初始状态下真实拦截失败（断言沙漏未替换与缺少 skill）；实施完成后转绿（Exit Code 0）。
+- **ES5 语法硬门禁**：通过 Acorn 解析 `static/index.html` 脚本（`{ ecmaVersion: 5 }`），确保 100% 遵守黑莓 BB10 WebKit 约束，杜绝语法泄漏。
+- **解耦契约门禁**：运行 `test-decoupling.mjs` 验证两条管道边界与无第三方私有调用，输出 `DECOUPLING PASS`。
+- **自动化测试全景**：`test-suite.mjs` 覆盖 7 大场景全量 100% PASS。
+
+## 三、分工契约与隔离有效性 (Contract Isolation)
+- **写域严格正交**：测试用例收敛于 `tests/acceptance/`，前端界面收敛于 `static/`，服务端收敛于 `server.mjs`，技能收敛于 `.agents/skills/voice-transcribe/`。
+- **最小闭包与抗熵增**：未侵入非因果代码，精准修复 `currentSessionCwd` 同步与上传进度环形反馈。
+
+## 四、元协议迭代建议 (Self-Evolving Protocol)
+- **多模态文件输入协议演进**：对于语音类输入，在底座尚未普及原生音频附件协议前，采用“前端状态环形反馈 + 服务端安全代理 + 专用转写 Skill”是兼顾设备兼容性与高成功率的最优实践。
+
+---
+
 # Meta Retrospective — 会话运行状态权威化（wave-2026-10-16）
 
 - 波次：`wave-2026-10-16`（语义分支 `session-state-authority-2026-10-16`）

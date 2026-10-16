@@ -1751,6 +1751,28 @@
       -webkit-box-sizing: border-box;
       box-sizing: border-box;
     }
+    .plus-file-spinner {
+      display: inline-block;
+      vertical-align: middle;
+      width: 12px;
+      height: 12px;
+      margin-right: 4px;
+      margin-top: -2px;
+    }
+    .plus-file-spinner-svg {
+      width: 12px;
+      height: 12px;
+      -webkit-animation: plusSpin 1s linear infinite;
+      animation: plusSpin 1s linear infinite;
+    }
+    @-webkit-keyframes plusSpin {
+      0% { -webkit-transform: rotate(0deg); }
+      100% { -webkit-transform: rotate(360deg); }
+    }
+    @keyframes plusSpin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
     #plus-file-card .plus-file-x {
       position: absolute;
       right: 2px;
@@ -2614,12 +2636,19 @@
       if (!plusFileCard || !plusFileText) return;
       if (!plusFile) { plusFileCard.style.display = 'none'; return; }
       var label = '📎 ' + plusFile.name + ' ' + plusFormatSize(plusFile.size) + ' ';
-      if (plusFile.state === 'uploading') label += '⏳上传中...';
-      else if (plusFile.state === 'reading') label += '⏳读取中...';
-      else if (plusFile.state === 'pending') label += '⏳待发送';
-      else if (plusFile.state === 'ready') label += '✔已暂存';
-      else label += '✖失败(点我重试)';
-      plusFileText.innerText = label;
+      var spinnerSvg = '<span class="plus-file-spinner"><svg class="plus-file-spinner-svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="#444444" stroke-width="2"></circle><circle cx="8" cy="8" r="6" fill="none" stroke="#4EC9B0" stroke-width="2" stroke-dasharray="28 10" stroke-linecap="round"></circle></svg></span>';
+      if (plusFile.state === 'uploading') {
+        var pctText = (typeof plusFile.pct === 'number' && plusFile.pct > 0) ? (plusFile.pct + '%') : '上传中...';
+        plusFileText.innerHTML = spinnerSvg + label + pctText;
+      } else if (plusFile.state === 'reading') {
+        plusFileText.innerHTML = spinnerSvg + label + '读取中...';
+      } else if (plusFile.state === 'pending') {
+        plusFileText.innerHTML = label + '待发送';
+      } else if (plusFile.state === 'ready') {
+        plusFileText.innerHTML = label + '✔已暂存';
+      } else {
+        plusFileText.innerHTML = label + '✖失败(点我重试)';
+      }
       plusFileCard.style.display = 'block';
     }
     function plusClear(suppressToast) {
@@ -2757,11 +2786,19 @@
     }
     // 已有 sid 的通用文件直传（plusStartUpload 的后半段，供首条 pending 复用）。
     function plusUploadFileToSession(file, sid, fname, fsize) {
-      plusFile = { name: fname, size: fsize, receiptId: '', state: 'uploading', err: '' };
+      plusFile = { name: fname, size: fsize, receiptId: '', state: 'uploading', err: '', pct: 0 };
       plusRenderCard();
       var xhr = new XMLHttpRequest();
       plusUploadXhr = xhr;
       try { xhr.timeout = 60000; } catch (e) {}
+      if (xhr.upload) {
+        xhr.upload.onprogress = function(pe) {
+          if (pe && pe.lengthComputable && pe.total > 0 && plusFile && plusFile.state === 'uploading') {
+            plusFile.pct = Math.min(99, Math.round((pe.loaded / pe.total) * 100));
+            plusRenderCard();
+          }
+        };
+      }
       xhr.open('POST', '/api/session/upload?sessionId=' + encodeURIComponent(sid) + '&name=' + encodeURIComponent(fname), true);
       // 原生字节直发：Content-Type 必须 octet-stream，且绝不能用 FormData（multipart 必 415）。
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
@@ -11732,6 +11769,7 @@
         setStatus('正在上传文件...', 'running');
         // 先将会话切到新 sid（归属/徽标/持久化即时落位），再传文件
         currentSessionId = newSid;
+        currentSessionCwd = getCwd() || '';
         try { saveActiveSession(getCwd(), newSid); } catch (eS) {}
         try { updateWsBadge(); } catch (eW) {}
         plusUploadFileToSession(fileObj, newSid, fname, (fileObj && fileObj.size) || 0);
@@ -11889,6 +11927,8 @@
       // 自动清空旧 sid、对齐归属与选择器、复位运行态，绝不把旧工作区会话串发到新工作区。
       var staleSCwd = (typeof currentSessionCwd === 'string') ? currentSessionCwd : '';
       if (currentSessionId && staleSCwd && staleSCwd !== cwd) {
+        // 如果当前有挂载的待发文件收据，切工作区清 sid 会让收据失效，一并清理
+        if (typeof plusClear === 'function') { try { plusClear(true); } catch (ePC1) {} }
         currentSessionId = '';
         currentSessionCwd = cwd || '';
         try { sessionSelect.selectedIndex = 0; } catch (eS0) {}

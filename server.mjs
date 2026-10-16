@@ -7333,6 +7333,7 @@ const server = http.createServer((req, res) => {
 
         // ── 官方引擎（DSH Web 在线时）：与 dsh web 同一归属逻辑 ──
         // session/create 时由宿主写入工作区归属，follow 流推送 durable 事件。
+        // 若携带 receiptIds，必须确保以宿主在线 RPC 处理（宿主持有 staged receipt）
         const rpcOutcome = await runChatViaHostRpc(task, {
           targetCwd,
           provider: targetProvider,
