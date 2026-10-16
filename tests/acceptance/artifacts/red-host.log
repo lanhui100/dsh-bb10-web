@@ -1,0 +1,16 @@
+$ Q20_ACCEPT_RUNNING_SID=session-mvaial3ckyi60b node tests/acceptance/suite-host.mjs
+# 运行时间: 2026-10-16T15:11:14+08:00
+(node:3168354) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+# Q20 验收套件 HOST (A8 真宿主一致性) — BASE=http://127.0.0.1:3090 HINT_SID=session-mvaial3ckyi60b
+# 时间: 2026-10-16T07:11:14.413Z
+▶ [HOST] A8 生产态：/api/sessions/status 与 /api/sessions 对真实 running 会话一致（且 <300ms）
+  ✖ FAIL [23233.3ms] A8 生产态：/api/sessions/status 与 /api/sessions 对真实 running 会话一致（且 <300ms）
+      断言失败: A8 指定会话 /api/sessions 行 isRunning [诊断 id=session-mvaial3ckyi60b isRunning=false state=stopped updatedAt=1792134501221.3477 (mtime age=196426ms) cwd=~/dsh-q20-web] → 期望: true；实际: false
+
+──────── HOST 报告 ────────
+✖ FAIL [23233.3ms] A8 生产态：/api/sessions/status 与 /api/sessions 对真实 running 会话一致（且 <300ms）
+        A8 指定会话 /api/sessions 行 isRunning [诊断 id=session-mvaial3ckyi60b isRunning=false state=stopped updatedAt=1792134501221.3477 (mtime age=196426ms) cwd=~/dsh-q20-web] → 期望: true；实际: false
+合计: 1 用例, PASS 0, FAIL 1, SKIP(degraded) 0
+SUITE-HOST SUMMARY: total=1 pass=0 fail=1 degraded=0
+host_exit=1

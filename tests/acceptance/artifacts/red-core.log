@@ -1,0 +1,49 @@
+$ node tests/acceptance/suite-core.mjs
+# 运行时间: 2026-10-16T15:11:06+08:00
+(node:3167740) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+# Q20 验收套件 CORE (A1–A7, A10) — 契约 .dev-team/contract-wave-2026-10-16.md
+# 时间: 2026-10-16T07:11:06.274Z
+▶ [CORE] A1 运行真源：RUNNING_SESSIONS 下 /api/sessions 报 isRunning=true/state=running
+  ✖ FAIL [359.11ms] A1 运行真源：RUNNING_SESSIONS 下 /api/sessions 报 isRunning=true/state=running
+      断言失败: A1 行 isRunning → 期望: true；实际: false
+▶ [CORE] A2 对抗注入 session/list 不可达（LIST_FAIL=1）：running 真源不得依赖 session/list 成功
+  ✖ FAIL [333.91ms] A2 对抗注入 session/list 不可达（LIST_FAIL=1）：running 真源不得依赖 session/list 成功
+      断言失败: A2 行 isRunning → 期望: true；实际: false
+▶ [CORE] A3 对抗注入 session/list 慢链路（LIST_DELAY_MS=8000）：/api/sessions 单次 <1500ms 且仍报 running
+  ✖ FAIL [339.97ms] A3 对抗注入 session/list 慢链路（LIST_DELAY_MS=8000）：/api/sessions 单次 <1500ms 且仍报 running
+      断言失败: A3 行 isRunning → 期望: true；实际: false
+▶ [CORE] A4 单一在飞 + 失败退避：LIST_FAIL=1 下连续 3 次 /api/sessions，共享主通道 session/list 调用 ≤1
+  ✖ FAIL [5592.67ms] A4 单一在飞 + 失败退避：LIST_FAIL=1 下连续 3 次 /api/sessions，共享主通道 session/list 调用 ≤1
+      SEAM-MISSING: SEAM-MISSING（契约 §1.4 未实现）: A4 Q20_MOCK_HOST_RPC_LOG 接缝活性（mock 必须写入 RPC 收据） → 期望: RPC_LOG 文件存在且 ≥1 条记录；实际: 5s 内未写入/为空: /tmp/q20-acc-rpc-1dd0UZ/rpc.log
+▶ [CORE] A5 子智能体真源：LIST_FAIL=1 下 /api/session/subagents?id=<parent> 仍含 SUBAGENTS 子会话
+  ✖ FAIL [487.8ms] A5 子智能体真源：LIST_FAIL=1 下 /api/session/subagents?id=<parent> 仍含 SUBAGENTS 子会话
+      断言失败: A5 subagents 必须非空（live 镜像 parentSessionId 兜底，即使 session/list 不可用） → 期望: 非空数组 (length ≥ 1)；实际: [] (length 0)
+▶ [CORE] A6 插队闸门（C-7）：live 镜像判定 running 时 POST /api/session/prompt {mode:'steer'} 返回 ok:true
+  ✖ FAIL [486.22ms] A6 插队闸门（C-7）：live 镜像判定 running 时 POST /api/session/prompt {mode:'steer'} 返回 ok:true
+      断言失败: A6 steer 必须放行（不得因 session/list 失败/未跑而拒绝） → 期望: {ok:true}；实际: {"ok":false,"error":"session not running"}
+▶ [CORE] A7 轻量状态端点（C-8）：/api/sessions/status?ids=<sid> → isRunning=true 且 <300ms
+  ✖ FAIL [343.27ms] A7 轻量状态端点（C-8）：/api/sessions/status?ids=<sid> → isRunning=true 且 <300ms
+      断言失败: A7 响应体 ok → 期望: {ok:true}；实际: null
+▶ [CORE] A10 ES5 门禁：static/index.html 内联脚本通过 acorn {ecmaVersion:5}
+  ✔ PASS [118.09ms] A10 ES5 门禁：static/index.html 内联脚本通过 acorn {ecmaVersion:5} — ES5 PASS (1 个内联 script, acorn 7.4.1)
+
+──────── CORE 报告 ────────
+✖ FAIL [359.11ms] A1 运行真源：RUNNING_SESSIONS 下 /api/sessions 报 isRunning=true/state=running
+        A1 行 isRunning → 期望: true；实际: false
+✖ FAIL [333.91ms] A2 对抗注入 session/list 不可达（LIST_FAIL=1）：running 真源不得依赖 session/list 成功
+        A2 行 isRunning → 期望: true；实际: false
+✖ FAIL [339.97ms] A3 对抗注入 session/list 慢链路（LIST_DELAY_MS=8000）：/api/sessions 单次 <1500ms 且仍报 running
+        A3 行 isRunning → 期望: true；实际: false
+✖ FAIL [5592.67ms] A4 单一在飞 + 失败退避：LIST_FAIL=1 下连续 3 次 /api/sessions，共享主通道 session/list 调用 ≤1
+        SEAM-MISSING（契约 §1.4 未实现）: A4 Q20_MOCK_HOST_RPC_LOG 接缝活性（mock 必须写入 RPC 收据） → 期望: RPC_LOG 文件存在且 ≥1 条记录；实际: 5s 内未写入/为空: /tmp/q20-acc-rpc-1dd0UZ/rpc.log
+✖ FAIL [487.8ms] A5 子智能体真源：LIST_FAIL=1 下 /api/session/subagents?id=<parent> 仍含 SUBAGENTS 子会话
+        A5 subagents 必须非空（live 镜像 parentSessionId 兜底，即使 session/list 不可用） → 期望: 非空数组 (length ≥ 1)；实际: [] (length 0)
+✖ FAIL [486.22ms] A6 插队闸门（C-7）：live 镜像判定 running 时 POST /api/session/prompt {mode:'steer'} 返回 ok:true
+        A6 steer 必须放行（不得因 session/list 失败/未跑而拒绝） → 期望: {ok:true}；实际: {"ok":false,"error":"session not running"}
+✖ FAIL [343.27ms] A7 轻量状态端点（C-8）：/api/sessions/status?ids=<sid> → isRunning=true 且 <300ms
+        A7 响应体 ok → 期望: {ok:true}；实际: null
+✔ PASS [118.09ms] A10 ES5 门禁：static/index.html 内联脚本通过 acorn {ecmaVersion:5}
+合计: 8 用例, PASS 1, FAIL 7, SKIP(degraded) 0
+SUITE-CORE SUMMARY: total=8 pass=1 fail=7 degraded=0
+core_exit=1

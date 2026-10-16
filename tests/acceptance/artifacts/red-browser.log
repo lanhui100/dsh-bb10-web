@@ -1,0 +1,21 @@
+$ node tests/acceptance/suite-browser.mjs
+# 运行时间: 2026-10-16T15:11:37+08:00
+(node:3173119) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+# Q20 验收套件 BROWSER (A9 真实页面) — 时间: 2026-10-16T07:11:37.727Z
+▶ [BROWSER] A9-C C 面板：全工作区进行中显示 running 会话（终态不得残留）+ Console Error=0 + 截图
+  (chromium: playwright default)
+  ✖ FAIL [21127.74ms] A9-C C 面板：全工作区进行中显示 running 会话（终态不得残留）+ Console Error=0 + 截图
+      断言失败: A9-C C 面板必须渲染出 running 会话行（20s 内未出现任何会话行） → 期望: ≥1 行 .tree-sess 且状态图标为 run-dot；实际: 行数=0; #sess-tree 文本="暂无进行中会话"
+▶ [BROWSER] A9-U U 面板：存在子智能体时必须非空渲染 + Console Error=0 + 截图
+  ✖ FAIL [20740.97ms] A9-U U 面板：存在子智能体时必须非空渲染 + Console Error=0 + 截图
+      断言失败: A9-U U 面板必须渲染出子智能体（20s 内未出现 acc-child-a9） → 期望: 包含 "acc-child-a9"；实际: #subagent-tree 文本="当前会话暂无子智能体 / Agent Team"
+
+──────── BROWSER 报告 ────────
+✖ FAIL [21127.74ms] A9-C C 面板：全工作区进行中显示 running 会话（终态不得残留）+ Console Error=0 + 截图
+        A9-C C 面板必须渲染出 running 会话行（20s 内未出现任何会话行） → 期望: ≥1 行 .tree-sess 且状态图标为 run-dot；实际: 行数=0; #sess-tree 文本="暂无进行中会话"
+✖ FAIL [20740.97ms] A9-U U 面板：存在子智能体时必须非空渲染 + Console Error=0 + 截图
+        A9-U U 面板必须渲染出子智能体（20s 内未出现 acc-child-a9） → 期望: 包含 "acc-child-a9"；实际: #subagent-tree 文本="当前会话暂无子智能体 / Agent Team"
+合计: 2 用例, PASS 0, FAIL 2, SKIP(degraded) 0
+SUITE-BROWSER SUMMARY: total=2 pass=0 fail=2 degraded=0
+browser_exit=1
