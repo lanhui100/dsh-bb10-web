@@ -1,0 +1,21 @@
+== 2026-10-16T14:09:49+08:00 PRE-FIX baseline ==
+-- /api/session/subagents?id=session-mvaial3ckyi60b
+{"parentId":"session-mvaial3ckyi60b","subagents":[],"tasks":[],"total":0,"page":{"limit":20,"offset":0,"total":0},"lite":true}
+http=200 time=4.438021s
+-- /api/sessions
+[{"id":"session-mvaial3ckyi60b","title":"当前项目需要优化： 1，会话状态错误； 2，c键呼出的正在进行中中的会话显示错误，可能是由于问题1造成的； 3，会话中u键呼出的子智能体，显示为空，但是实际上该","createdAt":1792127274889,"updatedAt":1792130988046.0317,"origin":"user","agentPreset":"standard","version":4,"cwd":"<repo>","isRunning":false,"isArchived":false,"state":"stopped"}]
+http=200 time=0.770548s
+-- live $events truth (subagent sessions)
+RUNNING: session-fb9cd268-6f96-40ae-b3b6-5ce9211581d7
+RUNNING: 7f8c1a12-d657-49df-a31d-6f94a4c058e9
+RUNNING: session-c5845dbb-b46f-48dd-9913-257b90e2382c
+RUNNING: session-d07a1342-0d32-42dd-9c25-1430634144e4
+RUNNING: 3419c3cd-1888-4400-bb9f-9568b423ce1b
+RUNNING: f98977d7-26a7-46d0-ae57-324f03f5c39d
+
+== 2026-10-16T14:23:43+08:00 PRE-FIX baseline: existing frozen suites ==
+-- node test-decoupling.mjs => exit 0
+-- node test-unit.mjs => exit 1 (28 total / 27 pass / 1 fail; total 117957ms)
+   FAIL: Subagents endpoint lite=1 envelope contract -- HTTP request timeout after 10000ms
+   (BASE_URL=http://127.0.0.1:3090 真实生产实例；根因同 §0)
+-- isolated mock repro (lib/test-mock-host.mjs, 同端点) => 2~4ms（证明慢来自真实实例的 session/list 超时，而非端点本身）
