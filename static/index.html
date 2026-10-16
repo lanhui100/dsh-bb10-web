@@ -6933,6 +6933,14 @@
       }
 
       if ((!list || list.length === 0) && (!tasks || tasks.length === 0)) {
+        // F-3：缓存中已有空快照但请求仍在途时，必须呈现加载态；
+        // 空态文案只在确实无子会话（请求已归来且仍为空）时出现。
+        if (subagentLoading) {
+          var ldEmpty = mkStateNode('load', '加载智能体中…');
+          subagentTree.appendChild(ldEmpty);
+          subagentNodes.push({ el: ldEmpty, kind: 'noop' });
+          return;
+        }
         var emptyText = isFallbackView ? '工作区暂无子智能体 / Agent Team / 后台任务' : '当前会话暂无子智能体 / Agent Team';
         var emptyNode = mkStateNode('empty', emptyText);
         subagentTree.appendChild(emptyNode);
@@ -7084,6 +7092,9 @@
       subagentLoading = true;
       subagentShownCount = subagentPageSize;
       var mySeq = ++subagentReqSeq;
+      // F-3：请求在途即刻刷新看板——空快照时呈现加载态，绝不提前呈现「暂无子智能体」空态；
+      // 已有行时按行渲染（不闪烁、不夺视口）。
+      if (isSubagentOpen) renderSubagentTree();
 
       var url = '/api/session/subagents?cwd=' + encodeURIComponent(cwd);
       if (sid) {
@@ -10678,6 +10689,164 @@
       xhr.send();
     }
 
+    // ---- F-1 轻量状态刷新（契约 C-18）：面板可见行运行状态 ≤5s 收敛 ----
+    // 走纯内存端点 /api/sessions/status（零宿主 RPC、零磁盘 IO），绝不触发 /api/sessions 全量重拉；
+    // /api/sessions 仅在「需要新的会话行」（缓存缺失/过期）或有界对账时拉取。
+    // 判定口径（C-18）：
+    //   known !== true        → 整行跳过，原样保留（严禁降级）
+    //   known && isRunning    → 升 running（state==='waiting' 保 waiting）
+    //   known && !isRunning   → 立即收敛 running 标记（state 置 'idle'），
+    //                           绝不据 'idle' 伪造 done/error/stopped 终态符号；
+    //                           原终态符号保留，并投入有界对账（每周期至多 1 个 cwd）
+    //                           （C-20：服务端只提升 running，前端对 isRunning:true 不加任何本地反证）
+    var sessStatusInFlight = false;
+    var sessStatusStartedAt = 0;
+    var sessStatusSeq = 0;
+    var sessStatusXhr = null;
+    var sessStatusReconcileCwd = '';
+
+    function hasOwn(obj, key) {
+      return Object.prototype.hasOwnProperty.call(obj, key);
+    }
+
+    // 可见会话 id 去重收集：当前会话 + 会话面板可见行 + 看板可见子智能体 + 已知 running 会话。
+    // C-18：单次最多 60 个 id（超出按顺序截断）。
+    function collectVisibleSessionIds() {
+      var ids = [];
+      var seen = {};
+      function pushId(sid) {
+        if (!sid || seen[sid]) return;
+        seen[sid] = true;
+        ids.push(sid);
+      }
+      if (currentSessionId) pushId(currentSessionId);
+      for (var i = 0; i < sessNodes.length; i++) {
+        var sn = sessNodes[i];
+        if (sn && sn.kind === 'sess' && sn.sid) pushId(sn.sid);
+      }
+      for (var j = 0; j < subagentNodes.length; j++) {
+        var an = subagentNodes[j];
+        if (an && an.kind === 'subagent' && an.item && an.item.id) pushId(an.item.id);
+      }
+      for (var sid in knownSessionsMap) {
+        if (hasOwn(knownSessionsMap, sid) && knownSessionsMap[sid] && knownSessionsMap[sid].isRunning) pushId(sid);
+      }
+      if (ids.length > 60) ids = ids.slice(0, 60);
+      return ids;
+    }
+
+    // 用 C-18 单条状态补丁一行；返回 'up' | 'down' | 'keep'
+    function applyLightStateToRow(row, st) {
+      if (!row || !st) return 'keep';
+      if (st.known !== true) return 'keep';
+      if (st.isRunning) {
+        row.isRunning = true;
+        row.state = (st.state === 'waiting') ? 'waiting' : 'running';
+        return 'up';
+      }
+      var wasRunning = !!row.isRunning;
+      row.isRunning = false;
+      if (row.state === 'running' || row.state === 'waiting' || !row.state) row.state = 'idle';
+      return wasRunning ? 'down' : 'keep';
+    }
+
+    function applyLightSessionStates(states) {
+      var reconcileCwd = '';
+      var key, i, row, st, res, list;
+      for (key in sessCache) {
+        if (!hasOwn(sessCache, key)) continue;
+        list = sessCache[key];
+        if (!list || !list.length) continue;
+        for (i = 0; i < list.length; i++) {
+          row = list[i];
+          if (!row || !row.id) continue;
+          st = states[row.id];
+          if (!st) continue;
+          res = applyLightStateToRow(row, st);
+          // 对账 cwd 仅取真实工作区键（排除 __ungrouped__ 聚合哨兵键，避免误拉 /api/sessions）
+          if (res === 'down' && !reconcileCwd && key.indexOf('__ungrouped__') !== 0) reconcileCwd = key.split('::')[0];
+        }
+      }
+      // 子智能体看板缓存同源补丁（F-3 状态部分：看板行与列表行同一权威口径）
+      for (key in subagentCache) {
+        if (!hasOwn(subagentCache, key)) continue;
+        var saData = subagentCache[key];
+        var saList = saData ? (saData.subagents || saData) : null;
+        if (!saList || !saList.length) continue;
+        for (i = 0; i < saList.length; i++) {
+          row = saList[i];
+          if (!row || !row.id) continue;
+          st = states[row.id];
+          if (!st) continue;
+          applyLightStateToRow(row, st);
+        }
+      }
+      // knownSessionsMap 仅做权威升级同步；降级交由有界对账（loadSessions →
+      // checkSessionsStateChanges）触发既有终态横幅，严禁在此伪造 done/error。
+      for (key in knownSessionsMap) {
+        if (!hasOwn(knownSessionsMap, key)) continue;
+        st = states[key];
+        if (!st || st.known !== true || !st.isRunning) continue;
+        var knownEntry = knownSessionsMap[key];
+        if (!knownEntry) continue;
+        knownEntry.isRunning = true;
+        knownEntry.state = (st.state === 'waiting') ? 'waiting' : 'running';
+      }
+      if (isSessOpen) renderSessTree(true);
+      if (isSubagentOpen) renderSubagentTree();
+      // W 面板聚合计数与会话列表同源（sessCache 已就地补丁）：保持既有 ≤5s 图标时效
+      if (isWsOpen) renderWsTree(true);
+      if (reconcileCwd && !sessStatusReconcileCwd) sessStatusReconcileCwd = reconcileCwd;
+    }
+
+    function refreshVisibleSessionStates() {
+      var nowMs = (new Date()).getTime();
+      // 单飞防重入：任意时刻至多 1 个在飞 XHR；上一次悬挂超过 10s（服务重启/半开连接）
+      // 视为失效代次，先递增 seq 使旧代次失效，再 abort 释放并开启新一轮，
+      // 避免轻量刷新被永久卡死、且不在 BB10 WebKit 上累积悬挂 XHR 占满单域连接。
+      if (sessStatusInFlight && (nowMs - sessStatusStartedAt) < 10000) return;
+      var ids = collectVisibleSessionIds();
+      if (!ids.length) return;
+      var seq = ++sessStatusSeq;
+      if (sessStatusXhr) {
+        // 资源释放：中止并释放旧代次；其 abort/回包回调被 seq 守卫忽略，
+        // 绝不误清新一轮的在飞标志（sessStatusXhr === xhr 双保险）。
+        try { sessStatusXhr.abort(); } catch (eAbort) {}
+        sessStatusXhr = null;
+      }
+      sessStatusInFlight = true;
+      sessStatusStartedAt = nowMs;
+      var xhr = new XMLHttpRequest();
+      sessStatusXhr = xhr;
+      xhr.open('GET', '/api/sessions/status?ids=' + encodeURIComponent(ids.join(',')), true);
+      // 资源释放：硬超时（对齐既有 XHR timeout 惯例）；超时按「无权威回包」处理，保留既有快照绝不降级
+      try { xhr.timeout = 10000; } catch (eT) {}
+      xhr.ontimeout = function() {
+        if (seq !== sessStatusSeq) return;
+        sessStatusInFlight = false;
+        if (sessStatusXhr === xhr) sessStatusXhr = null;
+      };
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState !== 4) return;
+        if (seq !== sessStatusSeq) return;
+        sessStatusInFlight = false;
+        if (sessStatusXhr === xhr) sessStatusXhr = null;
+        var st = 0;
+        try { st = xhr.status; } catch (e) {}
+        // 端点未部署/请求失败：保留既有快照，绝不降级（F-1 只做增量收敛）
+        if (!(st === 200 || st === 0)) return;
+        var data = null;
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch (pe) { return; }
+        if (!data || !data.ok || !data.states) return;
+        try {
+          applyLightSessionStates(data.states);
+        } catch (ae) {
+          // 轻量刷新异常不得打断后台轮询；下一周期自然重试，既有快照保持不变
+        }
+      };
+      xhr.send();
+    }
+
     // 会话列表预取包装：计数在途预取，用于欢迎页 loading 指示的显隐。
     function preloadSessions(cwd) {
       if (!cwd || sessCache[cwd] || sessLoading[cwd]) return;
@@ -12390,10 +12559,9 @@
       xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
       xhr.onreadystatechange = function() {
         if (xhr.readyState !== 4) return;
-        // 防跨会话竞态：若用户已切到其他会话，静默忽略旧会话响应
-        if (currentSessionId !== sid) {
-          return;
-        }
+        // 防跨会话竞态：用户已切走时不再改写当前视口；但**绝不静默丢弃响应**——
+        // 失败必须清槽并诚实呈现服务端真实错误文案（F-4：禁止静默失败或伪造成功）。
+        var isCurrent = (currentSessionId === sid);
         var st = 0;
         try { st = xhr.status; } catch (e) {}
         if (st === 200 || st === 0) {
@@ -12415,15 +12583,18 @@
             }
             // Plus 核销：追发成功即清卡（receipt/图片单次消费）
             if ((plusRunRid || plusRunImage) && typeof plusClear === 'function') { try { plusClear(true); } catch (ePC2) {} }
-            var msg = (mode === 'steer') ? '已插队 (按 Z 撤回)' : '已排队 (按 Z 撤回)';
-            showCopyToast(msg);
-            setStatus(msg, 'running');
+            if (isCurrent) {
+              var msg = (mode === 'steer') ? '已插队 (按 Z 撤回)' : '已排队 (按 Z 撤回)';
+              showCopyToast(msg);
+              setStatus(msg, 'running');
+            }
           } else {
-            // 发送失败移出底部停靠区并报错
+            // 发送失败移出底部停靠区并呈现服务端真实错误文案（切走会话时也绝不静默）
             clearQueueDock(sid);
             var failPrefix = (mode === 'steer') ? '插队失败: ' : '排队失败: ';
-            showCopyToast(failPrefix + (errMsg || '会话未运行'), true);
-            setStatus(failPrefix + (errMsg || '会话未运行'));
+            var failText = failPrefix + (errMsg || '会话未运行');
+            showCopyToast(failText, true);
+            if (isCurrent) setStatus(failText);
           }
         } else {
           clearQueueDock(sid);
@@ -12431,17 +12602,18 @@
             handleUnauthorized();
           } else {
             var failPrefix2 = (mode === 'steer') ? '插队失败: HTTP ' : '排队失败: HTTP ';
-            showCopyToast(failPrefix2 + st, true);
-            setStatus(failPrefix2 + st);
+            var failText2 = failPrefix2 + st;
+            showCopyToast(failText2, true);
+            if (isCurrent) setStatus(failText2);
           }
         }
-        if (typeof isStatusOpen !== 'undefined' && isStatusOpen) renderStatusPanel();
+        if (isCurrent && typeof isStatusOpen !== 'undefined' && isStatusOpen) renderStatusPanel();
       };
-      // 底层网络异常防悬挂：onerror / ontimeout 兜底清理 dock 并诚实报错
+      // 底层网络异常防悬挂：onerror / ontimeout 兜底清理 dock 并诚实报错（切走会话亦不静默）
       xhr.onerror = function() {
         clearQueueDock(sid);
+        showCopyToast('网络异常，消息未送达', true);
         if (currentSessionId === sid) {
-          showCopyToast('网络异常，消息未送达', true);
           setStatus('网络异常，追发失败');
         }
       };
@@ -13394,23 +13566,51 @@
     }
 
     // 定期轮询后台运行中会话状态以触发全局横幅通知（轻量 5s 周期）
+    // F-1：可见行状态走 C-18 轻量端点（≤5s，零宿主 RPC、零全量重拉）；
+    // /api/sessions 仅在「需要新的会话行」（缓存缺失/过期 ≥ WS_CACHE_STALE_MS）或有界对账时拉取。
     var dshPollCounter = 0;
     setInterval(function() {
       if (!isAuthOk) return; // 未认证通过时严禁后台轮询，防止 401 死循环
       var curCwd = getCwd();
       if (curCwd) {
-        if (!sessLoading[curCwd]) {
+        var nowMsPoll = (new Date()).getTime();
+        // 1) 轻量状态刷新：面板可见行 + 已知 running 会话 + 当前会话（C-18 纯内存端点）
+        try { refreshVisibleSessionStates(); } catch (eRs) {}
+        // 2) 有界对账：每周期至多 1 个 cwd，由权威 /api/sessions 补真实终态符号并触发既有终态横幅
+        if (sessStatusReconcileCwd) {
+          var reconcileCwdNow = sessStatusReconcileCwd;
+          sessStatusReconcileCwd = '';
+          if (reconcileCwdNow && !sessLoading[reconcileCwdNow]) loadSessions(reconcileCwdNow);
+        }
+        // 3) 当前工作区：仅在缓存缺失/过期（需要新的会话行）时才全量拉取
+        var curCacheStale = (!sessCache[curCwd] || (nowMsPoll - (sessCacheAt[curCwd] || 0) > WS_CACHE_STALE_MS));
+        if (curCacheStale && !sessLoading[curCwd]) {
           loadSessions(curCwd);
         }
         for (var sid in knownSessionsMap) {
           if (knownSessionsMap.hasOwnProperty(sid)) {
             var entry = knownSessionsMap[sid];
             if (entry && entry.isRunning && entry.cwd && entry.cwd !== curCwd) {
-              if (!sessLoading[entry.cwd]) {
+              // 异 cwd 在跑会话：状态已由轻量刷新覆盖，仅在其行缓存缺失/过期时才拉行
+              var otherCacheStale = (!sessCache[entry.cwd] || (nowMsPoll - (sessCacheAt[entry.cwd] || 0) > WS_CACHE_STALE_MS));
+              if (otherCacheStale && !sessLoading[entry.cwd]) {
                 loadSessions(entry.cwd);
               }
             }
           }
+        }
+        // 4) F-3：U 面板空态期间按 5s 周期重拉 /api/session/subagents，
+        //    空态文案只在确实无子会话时出现（有子会话时下一周期即补齐）
+        if (isSubagentOpen) {
+          try {
+            var sctxPoll = getSubagentTargetContext();
+            if (sctxPoll.sid) {
+              var scKey = (sctxPoll.cwd || '') + '::' + sctxPoll.sid;
+              var scData = subagentCache[scKey];
+              var scList = scData ? (scData.subagents || scData) : null;
+              if ((!scList || !scList.length) && !subagentLoading) loadSubagents(true);
+            }
+          } catch (eSa) {}
         }
         // W 面板聚合图标时效性：轮换刷新一个含在跑会话的已缓存工作区（每次最多 1 个 cwd），
         // loadSessions 归来分支在 isWsOpen 时自动重绘头部图标

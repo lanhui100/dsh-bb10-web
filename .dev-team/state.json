@@ -3,13 +3,98 @@
     {
       "wave": 1,
       "branch": "q20-docker",
-      "tasks": ["task-1", "task-2", "task-3"],
+      "tasks": [
+        "task-1",
+        "task-2",
+        "task-3"
+      ],
       "baseline_commit": "558fa2f",
       "red_commit": "659027f",
       "green_commit": "8aa0a15",
       "status": "completed",
       "quarantine": null,
       "nfr_degraded": []
+    },
+    {
+      "wave": 2,
+      "branch": "session-state-authority-2026-10-16",
+      "date": "2026-10-16",
+      "grade": "B",
+      "grade_triggers": [
+        "external-io: host session/list + /api/remote.mux stream",
+        "blast-keywords: net/stream/timeout/state-machine",
+        "multi-file: server.mjs + static/index.html + lib/ + tests/"
+      ],
+      "tasks": [
+        "task-1 (T3 tests)",
+        "task-2 (T1 server)",
+        "task-3 (T2 web)"
+      ],
+      "baseline_commit": "1317c05",
+      "red_commit": "1a12309",
+      "red_tag": "wave-2026-10-16-red",
+      "contract_commit": "61675f5",
+      "contract": ".dev-team/contract-wave-2026-10-16.md",
+      "green_commit": null,
+      "status": "in_progress",
+      "quarantine": null,
+      "nfr_degraded": [],
+      "write_scopes": {
+        "task-2": [
+          "server.mjs",
+          "lib/host-live-state.mjs"
+        ],
+        "task-3": [
+          "static/index.html"
+        ],
+        "task-1": [
+          "tests/acceptance/"
+        ]
+      },
+      "root_cause": "host session/list RPC 实测 474435ms/3891 items，主通道 6s 超时后 running 集合为 null，导致 isRunning/state/subagents/steer 全链路降级；失败不写缓存造成每次 /api/sessions 2×6s 重试风暴",
+      "counters": {
+        "L2T_fail_streak": {},
+        "L2AT_fail_streak": {},
+        "review_rounds": 5,
+        "reviews": {
+          "L3-A": {
+            "verdict": "FAIL",
+            "findings": 3,
+            "report": ".dev-team/review-l3a.json",
+            "fixed_by": "G1/G2"
+          },
+          "L3-B": {
+            "verdict": "FAIL",
+            "findings": 7,
+            "report": ".dev-team/review-l3b.json",
+            "fixed_by": "F1-F7"
+          },
+          "L3-P": {
+            "verdict": "FAIL",
+            "findings": 4,
+            "report": ".dev-team/review-l3p.json",
+            "fixed_by": "WS-timeout/XHR-abort/logging-baseline-evolution"
+          },
+          "INCREMENTAL": {
+            "verdict": "FAIL",
+            "findings": 2,
+            "report": ".dev-team/review-incremental.json",
+            "fixed_by": "U1(sessionStatusFact activeTasks)/U2(teamTasks cwd filter)"
+          },
+          "LEAD-FINAL": {
+            "finding": "C-21 trigger too strict (only 1 of 8 subagents shown)",
+            "fixed_by": "C-21 trigger broadened + projections negative cache"
+          }
+        },
+        "baseline_evolution": [
+          "nfr-baseline.json logging: json+trace_id -> text-prefix+correlation_token (Lead arbitration, ADR recorded)"
+        ],
+        "production_outage": {
+          "service": "dsh-q20-web.service",
+          "window_start": "2026-10-16T17:04+08:00",
+          "reason": "protect host waterfall settlement (L3-B F1)"
+        }
+      }
     }
   ]
 }

@@ -190,9 +190,48 @@ A1/A2/A5/A6/A7 的 `<sid>` 必须由测试通过 Q20 API（`session/ensure`/`cre
 - 已知残留风险（显式登记，靠 review）：超过 300s 无 durable 写入的长工具调用回合会被漏判为未运行，
   由 live 事件或后台播种（C-11）最终纠正。
 
+**C-21 子智能体冷启动真源（Lead 裁决，生产实测发现，必须实现）**：C-11 的 `session/list` 播种需 ≈474s，
+C-20 只覆盖「会话自身」运行态，**不覆盖父子关系**；因此 Q20 重启后（live 镜像为空、播种未完成）打开 `U` 面板
+仍会看到空列表——缺陷 #3 在冷启动窗口未真正闭环。
+实测（Lead，本机生产实例）：`session/projections` 信封 `payload.args = { request: { sessionId } }`（**注意与
+`session/list` 的 `{_request:{}}` 不同**）返回 **201ms**，其 `values` 含完整 `subagentCatalog`
+（`[{id, mode, label, createdAt}]`）与 `agentTeam`（`{members:[{id,name,role,phase}], tasks:[…]}`）。
+
+要求：
+- `/api/session/subagents?id=<sid>` 在「live 镜像无该 sid 的子会话」且「已知 list 快照为空/无该 sid 的 catalog」时，
+  对该 **单一 sid** 发起一次 `session/projections` 定向 RPC（超时 ≤5000ms），用 `subagentCatalog` + `agentTeam`
+  构造子会话/团队任务行；子会话的 `running` 优先取 live 镜像事实，缺失时按 catalog 存在即列出（`running:false`）。
+- 必须**单飞 + 短缓存**（每 sid TTL ≥15000ms，避免面板 5s 重拉打爆宿主）；失败/超时/异常一律回落 live 镜像与 list 快照，
+  **绝不抛错、绝不让该端点失败**（保持既有响应形状与字段名，C-10）。
+- 仅用于带 `id` 的会话级查询；工作区级（无 `id`）保持 live 镜像 + list 快照口径，不得逐会话放大 RPC。
+- mock 模式：`Q20_MOCK_HOST=1` 时不得发起真实 RPC（mock 分支返回 `{ok:true,value:{}}` 即可，A5 仍由 §1.4 接缝判定）。
+
+**C-22 C-3 阈值补充（Lead 裁决）**：`/api/session/subagents?id=…` 允许因 C-21 定向 RPC 增加 ≤1 次宿主调用，
+单次响应 P95 上限放宽到 **≤2500ms**；`/api/sessions` 与 `/api/sessions/status` 阈值不变（分别 ≤1500ms / ≤300ms）。
+
+**C-23 常驻 `$events` 订阅必须委托回瀑布（Lead 裁决，L3-B 致命项，必须实现）**：
+网关把每条 waterfall（`user-questions/request`、`approval/request`）投递给**所有**已注册的 remote event client，
+且仅在 `pending.deliveries.size === 0` 时 settle（`packages/api/gateway/src/index.ts` 的 `startRemoteEvent` /
+`receiveRemoteEventResult`）。Q20 既有 per-task 流在关闭时会自动移除 delivery，而**常驻 live 流永不关闭**——
+若不回应，宿主侧提问/审批将**永久挂起**（会打断 dsh web GUI 的提问与审批链路）。
+要求：live 流必须对**每一条** waterfall 帧立即回 `$events/result`
+（`payload.args = { clientId, eventId, outcome: { kind: 'next' } }`，`clientId` 取自 `ready` 帧，信封与既有
+`settleUserEvent` 一致），语义为「本 client 不认领，委托回瀑布」；`cancel` 帧仅清理本地挂起，无需回应。
+失败重试不得阻塞、不得抛错，日志带 C-14 关联 token。**`waterfall` 帧的 `request.args` 绝不得喂给状态镜像**
+（上游 `RemoteEventInvocationFrame` 无 `args` 字段，误喂会伪造 `running` 权威事实）。
+
+**C-24 `source` 枚举补充（Lead 裁决）**：`/api/sessions/status` 的 `source` 允许取值
+`'live' | 'list' | 'heuristic' | 'task'`（`'task'` = 本地 `activeTasks` 判定），前端不参与判定。
+
+**C-25 C-20 精度要求（Lead 裁决，L3-B 反例）**：`sessionTerminalState()` 把
+`cancelled/aborted/interrupted/blocked` 的 `turn/end` 也映射为 `'stopped'`，与「回合未终结」不可区分，
+会把已取消的会话在 300s 窗口内误报为 running。C-20 桥接必须**自带更精确的尾部判定**：
+只有「尾部最后一条终结性事件为 `user/message`/`turn/start`/`step/start`/`tool/call`/`assistant/message`
+且其后无 `turn/end`/`assistant/chunk(finish)`」才视为未终结；出现任何 `turn/end` 或 `finish` 一律不判 running。
+
 ## 4. NFR 增量（叠加 `.dev-team/nfr-baseline.json`）
 
-- 外部调用硬超时：`session/list` 60000ms；`session/prompt`/`session/cancel` 保持 ≤10000ms；`/api/sessions/status` 零外部调用。
+- 外部调用硬超时：`session/list` 主通道 600000ms（C-17 豁免，仅后台播种）；`session/prompt`/`session/cancel` 保持 ≤10000ms；`/api/sessions/status` 零外部调用。
 - 重连退避：`$events` 订阅 1s → 2s → 4s → … 上限 30s。
 - 资源释放：`stop()` 必须关闭 WebSocket、清理定时器。
 - 结构化日志：重连/降级必须带 `trace_id`（沿用既有日志风格，不引入 JSON 强约束以免破坏现有 stdout 契约）。

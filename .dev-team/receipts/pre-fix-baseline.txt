@@ -19,3 +19,54 @@ RUNNING: f98977d7-26a7-46d0-ae57-324f03f5c39d
    FAIL: Subagents endpoint lite=1 envelope contract -- HTTP request timeout after 10000ms
    (BASE_URL=http://127.0.0.1:3090 真实生产实例；根因同 §0)
 -- isolated mock repro (lib/test-mock-host.mjs, 同端点) => 2~4ms（证明慢来自真实实例的 session/list 超时，而非端点本身）
+
+== 2026-10-16T17:04:03+08:00 生产服务临时下线（保护宿主 waterfall 结算链路）==
+原因：L3-B F1 致命项——常驻 $events 订阅不回应 waterfall，会让宿主 user-questions/request 与 approval/request 在 deliveries 非空时永不 settle。
+已停：dsh-q20-web.service + dsh-q20-watchdog.timer（防 60s 看门狗自动拉起）；修复验证后由 Lead 重新启动。
+
+== 2026-10-16T18:08:45+08:00 终验：/api/bootstrap 冷调用 A/B（证明 P0 失败为环境性，非本次回归）==
+旧代码（worktree @ 1a12309，端口 3097，未含本波实现）：cold bootstrap = 11.930s
+新代码（生产 3090）：cold bootstrap = 12.007s（warm 4ms）
+两者一致 ⇒ 该 12s 来自宿主 3080 的慢响应（GET / 实测 1.8~2.6s，超过 checkDshHostAlive 的 2.5s 探活超时，触发 2 次探测 ≈5s；叠加 session/modelCatalog RPC 6s 超时），与本波改动无关。
+旁证：停掉 Q20 服务后宿主 GET / 仍为 2001~2566ms/超时（订阅非致因）。
+
+== 既有冻结套件对照（同一 test-unit.mjs）==
+修复前（旧代码 3090，14:23 基线）：Subagents endpoint lite=1 envelope contract ✖ FAIL(23387ms) HTTP request timeout after 10000ms
+修复后（新代码 3090，18:0x 终验）：同用例 ✔ PASS(5006ms)；Total 30 / Passed 29 / Failed 1（唯一失败 P0 Perf 为上述环境性）
+
+== 2026-10-16T18:13:34+08:00 终验（生产 3090 = 新代码，宿主 3080 真实链路）==
+-- [缺陷1] /api/sessions?cwd=...&refresh=1
+[{"id":"session-mvaial3ckyi60b","title":"当前项目需要优化： 1，会话状态错误； 2，c键呼出的正在进行中中的会话显示错误，可能是由于问题1造成的； 3，会话中u键呼出的子�
+   time=0.550282s http=200
+-- [缺陷5] /api/sessions/status?ids=...
+{"ok":true,"at":1792145616057,"states":{"session-mvaial3ckyi60b":{"isRunning":true,"state":"running","known":true,"source":"heuristic"},"__proto__":{"isRunning":false,"state":"idle","known":false,"source":""}}}
+   time=0.002173s
+-- [缺陷3] /api/session/subagents?id=session-mvaial3ckyi60b（子智能体计数）
+   subagents=1 tasks=0 total=1 running=1
+-- [缺陷4] steer 闸门（真实链路探针由 executor-server-2 执行并已回执 ok:true；本处验证反向：幽灵会话必须拒绝）
+{"ok":false,"error":"session not running"}
+-- [订阅在线]
+Oct 16 18:12:54 devserver dsh-q20-web[113347]: [HOST-LIVE] connected url=ws://127.0.0.1:3080/api/remote.mux conn=q20-live-vfx68ucv (reconnected) (backoff attempt 1)
+Oct 16 18:12:55 devserver dsh-q20-web[113347]: [HOST-LIVE] events ready conn=q20-live-vfx68ucv clientId=b493cb58-4e8c-4cba-930d-fc25b94eb720
+Oct 16 18:13:24 devserver dsh-q20-web[113347]: [HOST-LIVE] connection stable 30000ms; backoff reset conn=q20-live-vfx68ucv
+
+== 看门狗重启归因（2026-10-16T18:21:52+08:00）==
+18:01:12 的 stop/start 经 journal 溯源为 Lead 自己的『停服测宿主延迟』实验命令（非看门狗、非缺陷）。
+17:54:40 的 restart 来自看门狗（当时 Lead 正并发跑 test-unit 约 30 用例 + 3 次冷 bootstrap）。
+A/B 证据：冷 bootstrap 期间 healthz 时延 旧代码 1.6ms / 新代码 1.0-1.4ms（无事件循环阻塞）；288 会话全量列举期间 healthz 首探 旧 1.3ms / 新 329ms（C-20 桥接的同步 fs 工作，有界，远小于 5s 探活窗口）。
+结论：无本波引入的阻塞回归；冷 bootstrap 12s 为新旧一致的宿主依赖（GET / 实测 1.8-2.6s 触发 2×2.5s 探活 + session/modelCatalog 6s 超时）。
+
+== 2026-10-16T19:12:25+08:00 最终终验（生产 3090 = 最终代码；全量门禁全绿）==
+门禁：node --check exit 0；ES5 PASS；run-all suites=3 failed=0 exit 0；test-decoupling PASS exit 0；test-unit 35/35 exit 0；test-suite 7/7 exit 0
+
+-- [缺陷1] 会话状态
+[{"id":"session-mvaial3ckyi60b","title":"修复会话状态与子智能体显示","createdAt":1792127274889,"updatedAt":1792149144631.0464,"origin":"user","agentPreset":"standard","version":4,"cwd":"<repo>","isRunning":true,"isArchived":false,"state":"running"}]
+    time=0.454025s
+
+-- [缺陷2/5] C 面板数据源 + 轻量状态端点
+{"ok":true,"at":1792149145591,"states":{"session-mvaial3ckyi60b":{"isRunning":true,"state":"running","known":true,"source":"list"}}}
+    time=0.001125s
+-- [缺陷3] U 面板子智能体
+    subagents=8 tasks=3 total=8 running=4
+-- [缺陷4] steer 闸门反向验证（幽灵会话必须拒绝）
+{"ok":false,"error":"session not running"}

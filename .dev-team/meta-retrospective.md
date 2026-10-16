@@ -1,3 +1,62 @@
+# Meta Retrospective — 会话运行状态权威化（wave-2026-10-16）
+
+- 波次：`wave-2026-10-16`（语义分支 `session-state-authority-2026-10-16`）
+- 分级：**B 级**（机械触发：外部 IO/长连流、blast 关键字 net/stream/timeout/state-machine、跨文件多模块）
+- 红相锚定：commit `1a12309` / tag `wave-2026-10-16-red`；契约冻结 `61675f5`（`.dev-team/contract-wave-2026-10-16.md`）
+- 名册：Lead + test-agent + executor-server（耗尽后由 executor-server-2 接替）+ executor-web；审查走 Subagent 池（不占名册槽位）
+- 交付：`server.mjs` / `lib/host-live-state.mjs`（新增）/ `static/index.html` / `tests/acceptance/`（冻结）
+
+## 一、通信拓扑与信噪比（Topology & Noise）
+
+- **有效**：契约先冻结（C-1…C-25，含物理实测与 Lead 裁决），Executor 只需读契约 + 局部行区间即可实施，避免通读 6743 行 `server.mjs`；
+  审查者输出严格 JSON 落盘（`.dev-team/review-*.json`），机器可解析、零套话。
+- **有效**：把实测事实写进契约（`session/list` 474435ms/3891 items、`session/projections` 201ms、宿主 `GET /` 1.8–2.6s），
+  后续所有裁决共用同一事实底座，避免各说各话。
+- **失效**：首轮给 executor-server 的 prompt 过长且要求通读多个区域 → 该成员**上下文耗尽**（无收尾消息），需重新派生接替者。
+  教训：给实施者的初始 prompt 必须显式限定"只读哪些行区间、禁止通读 >2000 行文件"，并要求先落最小可用实现。
+- **噪声**：Lead 与 executor-web 就 C-8/C-18（`known`/`source` 三态）往返 2 轮。若首版契约即冻结"否定语义"，可省一轮。
+
+## 二、门禁穿透与误杀率（Gate Penetration / False Negatives & Positives）
+
+- **红相真实拦截**：11 用例中 9 条断言失败 + 1 条 SEAM-MISSING（契约 §1.4 未实现）+ A10 ES5 护栏绿；失败原因经分类，未出现"语法错误伪装红相"。
+- **测试独立性有效**：Test Agent 拒绝把 DEGRADED 记 PASS（Lead 打回后改为显式 SKIP + exit 3），并用网络拦截探针自证 A9 断言链路**可转绿**，
+  把红相归因锁定在缺陷而非测试缺陷；冻结后 hash 全程与锚定一致（Executor 无法改测试）。
+- **L3-P 有效**：4 条 finding 中 3 条为真（WS 建连无超时、前端 XHR 无 abort、日志关联 token 缺失）；
+  1 条（`trace_id`）暴露的是**基准与仓库现实不符** → 走基准演进门禁，避免契约外重构。
+- **L3-B 拦下致命项**：常驻 `$events` 订阅不回应 waterfall，会让宿主 `user-questions/request` / `approval/request`
+  在 `deliveries` 非空时**永不 settle**（打断 dsh web GUI 提问与审批）。该缺陷**红相测试完全覆盖不到**，
+  证明互补视角对抗审查不可被机器门禁替代。代价：Lead 为保护宿主临时下线生产服务 44 分钟（17:04–17:48）。
+- **L3-A 拦下口径分裂**：`hostRunningCache.ids` 成功即永久非 null，使 C-20 桥接在两处成死代码 →
+  `/api/sessions` 与 `/api/sessions/status` 结论相反、steer 被拒。同类"同一语义多实现"缺陷亦为机器门禁盲区。
+- **误杀**：0 条（14 条 finding 全部经复核为真或归因为基准问题）。
+- **真实交付冒烟**：生产态（真宿主 3080 + 真浏览器）产出物理收据——ES5 PASS、A1–A10 全绿（run-all exit 0）、
+  `/api/sessions` 12.5s→0.55s、`/api/session/subagents` 空→非空（C-21 冷启动 0.695s）、浏览器 Console Error=0 + 截图；
+  既有冻结套件 `test-unit.mjs` 的 `Subagents endpoint lite=1` 由 FAIL(10s 超时) 转 PASS(5.0s)。
+- **环境性失败如实登记（未伪装绿）**：`test-unit.mjs` 余 1 条 `P0 Perf/Security`（冷 `/api/bootstrap` 12s > 测试 10s 超时）。
+  经 worktree A/B 证明旧代码同为 11.93s，且与停掉 Q20 服务无关（宿主 `GET /` 本身 1.8–2.6s）⇒ 环境性、非本波回归。
+
+## 三、分工契约与隔离有效性（Contract Isolation）
+
+- **写域正交有效**：T1（`server.mjs` + `lib/host-live-state.mjs`）与 T2（`static/index.html`）零重叠，两 Executor 全程并行无脏写；
+  T3（`tests/acceptance/`）chmod 444 冻结。Join Barrier 机械写域审计：`git diff --name-only` 全部落在声明 scope 内。
+- **接缝设计有效**：`Q20_MOCK_HOST_*` 五变量作为唯一注入点，让"宿主不可达/慢链路"可确定性复现（A2–A5 全靠它），
+  且被 grep 证明生产路径不读取。
+- **串行化代价**：T1/T2 以 `blocked_by: task-1` 等待红相完成（≈30 分钟），换来"测试先冻结"的强保证；期间 Executor 只读侦察未浪费。
+- **失效**：契约在实施中途演进 4 次（C-13…C-25），Executor 需反复重读。根因是 Lead 的实测发现晚于契约冻结。
+
+## 四、元协议迭代建议（Self-Evolving Protocol）
+
+1. **契约模板新增「否定语义」强制项**：状态类接口必须显式声明 `unknown` 与 `false` 的区别及消费者义务
+   （本波 `known:false 不得降级` 直接避免了原缺陷复现）。
+2. **契约模板新增「关键路径实测前置」**：外部依赖的实测延迟/体积/帧形状须在契约冻结前完成并写入 §0，避免中途演进。
+3. **实施者 prompt 模板新增上下文预算条款**：限定可读行区间、禁止通读大文件、先最小实现后迭代（本波 1 次上下文耗尽）。
+4. **对抗审查固定「上游副作用面」视角**：新增的长连/订阅消费者是否改变了上游"广播-结算"协议的整体性？
+   本波致命项正属此类（长连消费者是协议参与者，不只是观察者）。
+5. **NFR 基准冻结时增加「与本仓库现状一致性」校验**：全树 0 命中的条款（如 `trace_id`）应在冻结时暴露，
+   而非等到 L3-P 判 FAIL 后才走演进流程。
+
+---
+
 # Meta Retrospective — 当前工作区会话列表归档视图筛选快捷键与懒加载 (2026-10-08)
 
 ## 一、通信拓扑与信噪比 (Topology & Noise)

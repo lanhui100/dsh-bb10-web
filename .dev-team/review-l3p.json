@@ -1,0 +1,29 @@
+{
+  "verdict": "FAIL",
+  "findings": [
+    {
+      "file": "lib/host-live-state.mjs",
+      "line": 368,
+      "rule": "external_call_timeout_ms",
+      "counterexample": "WS 建连无硬超时：connect() 仅 `next = new WebSocketImpl(url, { headers: headers })`，未传 handshakeTimeout、未设 open 看门狗（全文件仅 reconnectTimer/stabilityTimer 两个定时器，均非建连超时）。ws@8.21.0 lib/websocket.js:767 `opts.timeout = opts.handshakeTimeout` 且 :888 `if (opts.timeout)` ⇒ 未传即无握手超时。TCP 已连但 upgrade 无响应时不产生 open/error/close，scheduleReconnect 只在 ctor catch（:369-372）与 close（:410-419）触发 ⇒ $events 订阅永久静默死亡，且无任何 [HOST-LIVE] 日志（C-14 观测亦不满足）。同仓同类外部 WS 建连均有硬超时：server.mjs:1654 =8000ms、server.mjs:1889 =6000ms；契约 §4 未对 WS 建连给豁免。"
+    },
+    {
+      "file": "static/index.html",
+      "line": 10811,
+      "rule": "resource_release",
+      "counterexample": "前端新增 XHR 悬挂且从不 abort：refreshVisibleSessionStates 的 XHR（10811 new XMLHttpRequest / 10812 open / 10830 send）未设 xhr.timeout，onreadystatechange（10813-10829）与任何路径都无 xhr.abort()；而 10805 `if (sessStatusInFlight && (nowMs - sessStatusStartedAt) < 10000) return;` 在上一代在飞超 10s 时直接新建下一代（注释自述「放弃旧代次」），旧 XHR 永不被 abort/超时 ⇒ 服务端半开或 /api/sessions/status 悬挂时每 10s 泄漏 1 个悬挂 XHR，BB10 WebKit 单域并发连接数被占满后 /api/sessions 轮询与聊天流全部排队阻塞。同文件既有惯例均设超时并 abort：xhr.timeout=15000/60000/20000（2629/2752/9306）、abort()（2615/4070/7538/7586/7642/9232/9345/11449/11453/11596）。"
+    },
+    {
+      "file": "lib/host-live-state.mjs",
+      "line": 330,
+      "rule": "logging",
+      "counterexample": "重连日志无 trace_id：`log('[HOST-LIVE] reconnect #' + reconnectCount + ' in ' + delay + 'ms (backoff attempt ' + backoffAttempts + ')')` 及同族 connected/disconnected 日志（:323/:329/:379/:415）均无 trace_id。基准 logging.required_fields 含 trace_id，契约 §4 明定「重连/降级必须带 trace_id」（仅豁免 JSON 强约束）。机械取证：`grep -rc 'trace_id' server.mjs lib/*.mjs` 全部为 0。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 1093,
+      "rule": "logging",
+      "counterexample": "降级日志无 trace_id：`console.warn(`[HOST-LIST] session/list failed (streak=${hostSessionListFullFailStreak}); backoff ${HOST_LIST_FULL_FAIL_BACKOFF_MS}ms, ...`)` 与 :1100 `[HOST-LIST] session/list threw: ...`、:1162 `[HOST-LIVE] noteListItems failed: ...` 均无 trace_id。基准 logging.required_fields 含 trace_id，契约 §4 明定「重连/降级必须带 trace_id」。机械取证：`grep -n trace_id server.mjs` 无匹配。"
+    }
+  ]
+}

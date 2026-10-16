@@ -6,8 +6,26 @@
   },
   "concurrency_lock": "single-writer-state-mutex",
   "logging": {
-    "format": "json",
-    "required_fields": ["trace_id", "timestamp", "level"]
+    "format": "text-prefix",
+    "required_fields": ["correlation_token", "level"],
+    "note": "Lead 仲裁（2026-10-16，wave-2026-10-16）：原条款 format=json + trace_id 与本仓库既有冻结的 stdout 文本契约冲突（全树 trace_id 计数为 0，且服务日志为人类可读文本，改造为 JSON 属契约外重构）。意图（每条重连/降级日志可关联）不变，载体改为：稳定前缀（[HOST-LIVE]/[HOST-LIST]）+ 关联 token（conn=<streamId>、sid=<sessionId>、attempt=<n>）+ 级别语义（connected/disconnected/reconnect/failed）。演进记录见 .agents/notes/implemented/bug-fix/2026-10-16-session-running-state-authority.md。",
+    "required_tokens": {
+      "HOST-LIVE": ["conn=<streamId>"],
+      "HOST-LIVE-per-session": ["sid=<sessionId>"],
+      "HOST-LIST": ["attempt=<n>"]
+    }
   },
-  "resource_release": ["clear-timers", "abort-xhr", "close-sockets"]
+  "resource_release": ["clear-timers", "abort-xhr", "close-sockets"],
+  "wave_2026_10_16_overrides": {
+    "external_call_timeout_ms": {
+      "host_session_list_main_channel": 600000,
+      "host_session_projections_targeted": 5000,
+      "reason": "契约 C-17/C-21：session/list 实测 474435ms/3891 items，仅后台播种；C-21 定向 projections 实测 201ms。二者均不得进入请求热路径（/api/sessions、/api/sessions/status）。"
+    },
+    "hot_path_p95_ms": {
+      "/api/sessions": 1500,
+      "/api/sessions/status": 300,
+      "/api/session/subagents?id=": 2500
+    }
+  }
 }

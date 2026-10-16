@@ -1,0 +1,23 @@
+{
+  "verdict": "FAIL",
+  "findings": [
+    {
+      "file": "server.mjs",
+      "line": 1364,
+      "rule": "C-20 / C-7 三处 running 口径不一致（已实机复现）：isSessionUiRunning 第 3 步（1363-1368）在 list 快照非 null 时直接返回、永不落到 1370-1374 的 C-20 桥接；/api/session/prompt 闸门（6449）以 cachedHostRunning===null 作为桥接前置；而 sessionStatusFact（1406-1412）逐 sid 无条件桥接。list 快照一旦成功一次即永久非 null（失败也不置 null），故 C-20 桥接在 /api/sessions 与闸门上是死代码 => 同一 sid 两个端点 running 相反，且插队被拒（缺陷 #4 复现）。",
+      "counterexample": "复现（全部在 /tmp 假 DSH_HOME 内，无生产副作用）：\n1) 造 durable 目录 /tmp/q20fake/sessions/--tmp-q20fake-ws--/session-bridge01/：session.v4.jsonl.zstd = zstdCompressSync(1 行 {id:\"session-bridge01\"} + 1 行 {type:\"user/message\"})（尾部未终结 => sessionTerminalState===\"stopped\"）；空 session.lock 由另一进程 flock 独占；mtime 新鲜(<300s)。\n2) DSH_HOME=/tmp/q20fake Q20_MOCK_HOST=1 PORT=3092 HOST=127.0.0.1 node server.mjs —— mock session/list 成功返回空 items => hostRunningCache.ids = 空 Set（非 null）。\n3) curl \"http://127.0.0.1:3092/api/sessions/status?ids=session-bridge01\" => 实际 {\"isRunning\":true,\"state\":\"running\",\"known\":true,\"source\":\"heuristic\"}（此端点符合 C-20）。\n4) curl \"http://127.0.0.1:3092/api/sessions?cwd=/tmp/q20fake/ws\" => 实际 [{\"id\":\"session-bridge01\",\"title\":\"\",\"origin\":\"user\",\"cwd\":\"/tmp/q20fake/ws\",\"isRunning\":false,\"isArchived\":false,\"state\":\"stopped\"}]；契约 .dev-team/contract-wave-2026-10-16.md:185-186 要求此处 isRunning=true,state=\"running\"。\n5) curl -X POST -H \"Content-Type: application/json\" -d {\"sessionId\":\"session-bridge01\",\"prompt\":\"x\",\"mode\":\"steer\",\"cwd\":\"/tmp/q20fake/ws\"} http://127.0.0.1:3092/api/session/prompt => 实际 {\"ok\":false,\"error\":\"session not running\"}；C-7 要求放行。\n6) 因果对照：同环境仅加 Q20_MOCK_HOST_LIST_FAIL=1（list 快照保持 null，PORT=3093）=> status 仍 isRunning:true；/api/sessions 变为 isRunning:true,state:\"running\"；prompt 返回 {\"ok\":true,...}。证明分歧唯一原因是 hostRunning/cachedHostRunning 非 null 时短路了桥接。\n生产可达性：C-20 的前提（无权威事实的会话）正是「list 快照未覆盖 + live 未推送」的会话；快照 TTL 30 分钟（HOST_LIST_FULL_TTL_MS=1800000，server.mjs:1048），期间新建/未被快照覆盖的会话即落入该状态。"
+    },
+    {
+      "file": "lib/host-live-state.mjs",
+      "line": 356,
+      "rule": "C-23 常驻 $events 订阅必须对每条 waterfall 帧回 $events/result（outcome {kind:\"next\"}）委托回瀑布；本模块的 handleFrame 全程不发送任何回包，也不记录 ready 帧的 clientId => 网关 pending.deliveries 永不归零，宿主侧提问/审批永久挂起，pendingRemoteEvents 逐条累积（资源泄漏/活性缺陷）。",
+      "counterexample": "静态取证（命令）：grep -n \"events/result\" lib/host-live-state.mjs => 0 命中（exit=1）；grep -n \"\\.send(\" lib/host-live-state.mjs => 仅 393 行一处（订阅 open 帧）；grep -n \"clientId\" lib/host-live-state.mjs => 0 命中；352-361 行把 ready/cancel 帧显式注释为 no-op。\n网关侧语义（只读源码 <DSH_ROOT>/packages/api/gateway/src/index.ts）：604-606 deliverRemoteEvent 把每个已注册 client 加入 pending.deliveries；630 行仅当 pending.deliveries.size === 0 才 settleRemoteEvent(pending,{kind:\"next\"})；437 行 $events/result 是唯一出清路径。\n对照既有 per-task 流：server.mjs:1488-1494 settleUserEvent 会发 $events/result 且流在 turn/end 后关闭；新增常驻流永不关闭、永不回应 => 该 client 永久留在每条 waterfall 的 deliveries 中。\n期望 vs 实际：宿主收到 user-questions/request（或 approval/request）后，本常驻 client 不回应 => dsh web GUI 的提问/审批永不结算（挂起），且每个提问在宿主 pendingRemoteEvents 中留下一条永不释放的挂起记录。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 1386,
+      "rule": "C-4 / C-24 口径不一致（代码行推演，未实机注入）：sessionStatusFact 无本地 activeTasks 分支（isSessionUiRunning 1345-1348 有且优先返回 true），且 live/list 镜像权威分支（1386-1395）先于事实缓存 => 本地 SDK 回退任务运行时，同一 sid 在 /api/sessions 为 running、在 /api/sessions/status 为 isRunning:false/known:true；前端 F-1 据此判 down 并触发每 5s 一次的有界对账 loadSessions（自激循环 + running 图标闪烁），C-24 允许的 source:\"task\" 在该 sid 有镜像事实时不可达。",
+      "counterexample": "代码行证据：(a) server.mjs:1345-1348 本地 task.status===\"running\" 时 isSessionUiRunning 直接返回 true；(b) server.mjs:1386-1395 sessionStatusFact 第一步只查 hostLiveState.hasRunningTruth(sid)，命中即返回镜像 running（陈旧 list/live 事实 running=false）且 known:true，永不读 activeTasks；(c) server.mjs:7106-7120 证明宿主不可达回退 SDK 子进程引擎时确实以 status:\"running\" 写入 activeTasks；(d) static/index.html:10739-10750 applyLightStateToRow 对 known:true && !isRunning 返回 down，static/index.html:10799 置 sessStatusReconcileCwd，static/index.html:13583 每周期 loadSessions 该 cwd => 服务端 1345-1348 又报 running，循环不收敛。\n触发输入：某旧会话已在 list 快照中（镜像 truth=source:\"list\", running:false），随后宿主失联，用户对该会话发消息走 SDK 回退（activeTasks 中存在 status:\"running\" 的 task）；此后 GET /api/sessions/status?ids=<sid> 与 GET /api/sessions?cwd=<cwd> 对同一 sid 给出相反 isRunning。\n标注：该路径需真实宿主不可达 + SDK 回退（会产生真实模型调用），故未做实机注入，仅以精确代码行推演给出反例（属 non-machine 取证）。"
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { createStreamFold } from './lib/stream-fold.mjs';
+import { createHostLiveState } from './lib/host-live-state.mjs';
 import { createSessionEventHandler as createSessionEventHandlerImpl } from './lib/session-events.mjs';
 import { classifyQuestionFrame } from './lib/ask-ownership.mjs';
 import { applySubagentLite } from './lib/subagent-lite.mjs';
@@ -230,6 +231,89 @@ function mockCreateSession(sid, workspaceId) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// §1.4 mock 宿主测试接缝（仅 Q20_MOCK_HOST=1 分支读取；生产路径绝不读取）
+//   Q20_MOCK_HOST_RUNNING_SESSIONS / LIST_DELAY_MS / LIST_FAIL / SUBAGENTS / RPC_LOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 物理收据：每次 mock RPC 追加一行 JSON {"method","at"}（测试可数请求次数）。 */
+function mockNoteRpc(method) {
+  const file = process.env.Q20_MOCK_HOST_RPC_LOG;
+  if (!file) return;
+  try {
+    fs.appendFileSync(file, JSON.stringify({ method: method, at: Date.now() }) + '\n');
+  } catch { /* 收据写入失败不影响被测行为 */ }
+}
+
+/** §1.4 接缝：逗号分隔的「mock 侧 running 会话」（session/list 与 live 真源共用）。 */
+function mockSeamRunningIds() {
+  const raw = process.env.Q20_MOCK_HOST_RUNNING_SESSIONS || '';
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/** §1.4 接缝：并入 session/list items 的子会话行（JSON 数组）。 */
+function mockSeamSubagents() {
+  const raw = process.env.Q20_MOCK_HOST_SUBAGENTS;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x) => x && typeof x === 'object' && x.sessionId);
+  } catch {
+    return [];
+  }
+}
+
+/** mock session/list items：内存注册表 + §1.4 接缝（running / SUBAGENTS）。 */
+function mockSessionListItems() {
+  const runningIds = new Set(mockSeamRunningIds());
+  const items = [];
+  const seen = new Set();
+  for (const s of mockHostState.sessions.values()) {
+    const running = runningIds.has(s.id);
+    items.push({
+      sessionId: s.id,
+      title: s.title,
+      running: running,
+      state: running ? 'running' : 'done',
+      projections: { values: { title: s.title } },
+    });
+    seen.add(s.id);
+  }
+  for (const sub of mockSeamSubagents()) {
+    if (seen.has(sub.sessionId)) continue;
+    seen.add(sub.sessionId);
+    const running = sub.running !== undefined ? !!sub.running : runningIds.has(sub.sessionId);
+    items.push({
+      sessionId: sub.sessionId,
+      title: sub.title || '',
+      running: running,
+      state: running ? 'running' : 'done',
+      parentSessionId: sub.parentSessionId || '',
+      origin: sub.origin || 'subagent',
+      cwd: sub.cwd || '',
+      projections: { values: { title: sub.title || '', subagent: sub } },
+    });
+  }
+  return items;
+}
+
+/**
+ * mock RPC 入口（仅 Q20_MOCK_HOST=1）：写 RPC 收据 + 施加 §1.4 的 session/list 注入。
+ * 生产路径绝不经过本函数。
+ */
+function mockHandleRpcAsync(method, request) {
+  mockNoteRpc(method);
+  if (method !== 'session/list') return Promise.resolve(mockHandleRpc(method, request));
+  const fail = process.env.Q20_MOCK_HOST_LIST_FAIL === '1';
+  const delay = Number(process.env.Q20_MOCK_HOST_LIST_DELAY_MS || 0);
+  const respond = () => (fail ? { ok: false, error: 'mock: session/list injected failure' } : mockHandleRpc(method, request));
+  if (Number.isFinite(delay) && delay > 0) {
+    return new Promise((resolve) => { setTimeout(() => resolve(respond()), delay); });
+  }
+  return Promise.resolve(respond());
+}
+
 function mockHandleRpc(method, request) {
   const req = (request && typeof request === 'object') ? request : {};
   switch (method) {
@@ -252,11 +336,7 @@ function mockHandleRpc(method, request) {
       return { ok: true, value: { sessionId: sid } };
     }
     case 'session/list': {
-      const items = [];
-      for (const s of mockHostState.sessions.values()) {
-        items.push({ sessionId: s.id, title: s.title, running: false, projections: { values: { title: s.title } } });
-      }
-      return { ok: true, value: { items } };
+      return { ok: true, value: { items: mockSessionListItems() } };
     }
     case 'session/modelCatalog': {
       return {
@@ -787,7 +867,7 @@ async function callDshWebArchiveSession(sessionId) {
 function callDshWebRpc(method, request, timeoutMs = 8000, opts = {}) {
   // mock 宿主：短路到进程内注册表，绝无真实网络/LLM 链路。
   if (Q20_MOCK_HOST) {
-    return Promise.resolve(mockHandleRpc(method, request));
+    return mockHandleRpcAsync(method, request);
   }
   return new Promise((resolve) => {
     try {
@@ -872,6 +952,15 @@ let hostSessionListInflight = null;
 const HOST_RUNNING_CACHE_TTL_MS = 8000;
 const HOST_TITLE_CACHE_TTL_MS = 15000;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 宿主 $events 权威状态镜像（单例，进程启动时在 listen 回调内建立并 start()）
+//   lib/host-live-state.mjs（契约 §1.1 冻结签名）；生产路径注入真实 mux 连接参数，
+//   Q20_MOCK_HOST=1 时不注入 transport（start() 安全 no-op）并由 §1.4 接缝同步播种。
+// ─────────────────────────────────────────────────────────────────────────────
+let hostLiveState = null;
+/** C-20 冷启动桥接：durable mtime 新鲜窗口（毫秒）。 */
+const HOST_LIVE_BRIDGE_MTIME_MS = 300000;
+
 let dshHostAliveCache = { alive: null, at: 0 };
 let dshHostAliveInflight = null;
 const DSH_HOST_ALIVE_TTL_MS = 5000;
@@ -953,41 +1042,87 @@ async function checkDshHostAlive(force = false) {
  * 看板）与 /api/sessions 等消费方共享同一次 RPC，避免每次开看板都重新向宿主拉全量，
  * 这是看板“先显标题再显详情”懒加载的带宽与延迟前提。
  */
-const HOST_LIST_FULL_TTL_MS = 8000;
+// 契约 C-17（Lead 实测修正 C-2）：宿主 session/list 真实全量返回实测 474435ms / 3891 items，
+// 故主通道超时 ≥600000ms、成功 TTL ≥1800000ms、失败退避 ≥300000ms。
+// 主通道永远后台化 + 单一在飞：绝不进入任何请求的热路径，失败绝不清空已知 running（C-1/C-4）。
+const HOST_LIST_FULL_TTL_MS = 1800000;
+const HOST_LIST_FULL_TIMEOUT_MS = 600000;
+const HOST_LIST_FULL_FAIL_BACKOFF_MS = 300000;
+// mock 模式保持短 TTL：mock RPC 是进程内同步调用，测试需要即时可见性（生产语义不变）。
+const HOST_LIST_FULL_TTL_MS_MOCK = 8000;
 let hostSessionListFullCache = { items: null, at: 0 };
 let hostSessionListFullInflight = null;
+let hostSessionListFullNextAttemptAt = 0;
+let hostSessionListFullFailStreak = 0;
+
+function hostListFullTtlMs() {
+  return Q20_MOCK_HOST ? HOST_LIST_FULL_TTL_MS_MOCK : HOST_LIST_FULL_TTL_MS;
+}
 
 /**
  * 获取宿主 session/list 完整 items；宿主不可达或 RPC 失败返回 null（调用方降级为空列表）。
- * - 非 mock 模式：短缓存 + 单飞复用；force=true 穿透缓存（在途请求照常合并）。
- * - mock 模式：不做缓存，保证测试期间宿主状态变化即时可见。
+ * - 单一在飞（C-1）：任意时刻全进程最多 1 个 session/list 在飞，并发调用挂靠同一 Promise。
+ * - 失败退避（C-2/C-17）：失败后 ≥300s 内不再发起，且**绝不清空**已知 running 快照（C-4）。
+ * - force=true 仅穿透成功缓存，不穿透失败退避（避免重试风暴）。
  */
 async function fetchHostSessionListFull(force = false) {
-  if (Q20_MOCK_HOST) {
-    const rpcRes = await callDshWebRpc('session/list', { _request: {} }, 6000, { rawArgs: true });
-    return (rpcRes.ok && rpcRes.value && Array.isArray(rpcRes.value.items)) ? rpcRes.value.items : null;
-  }
   const now = Date.now();
-  if (!force && hostSessionListFullCache.items !== null && (now - hostSessionListFullCache.at < HOST_LIST_FULL_TTL_MS)) {
+  if (!force && hostSessionListFullCache.items !== null
+    && (now - hostSessionListFullCache.at < hostListFullTtlMs())) {
     return hostSessionListFullCache.items;
   }
   if (hostSessionListFullInflight) {
     return hostSessionListFullInflight;
   }
+  if (now < hostSessionListFullNextAttemptAt) {
+    return hostSessionListFullCache.items;
+  }
   hostSessionListFullInflight = (async () => {
     try {
-      const result = await callDshWebRpc('session/list', { _request: {} }, 6000, { rawArgs: true });
+      const result = await callDshWebRpc('session/list', { _request: {} }, HOST_LIST_FULL_TIMEOUT_MS, { rawArgs: true });
       let items = null;
       if (result.ok && result.value && Array.isArray(result.value.items)) {
         items = result.value.items;
         hostSessionListFullCache = { items, at: Date.now() };
+        hostSessionListFullNextAttemptAt = 0;
+        hostSessionListFullFailStreak = 0;
+      } else {
+        // 失败：保留既有快照（可能为 null），进入退避窗口；绝不把已知 running 清空
+        hostSessionListFullFailStreak++;
+        hostSessionListFullNextAttemptAt = Date.now() + HOST_LIST_FULL_FAIL_BACKOFF_MS;
+        console.warn(`[HOST-LIST] session/list failed attempt=${hostSessionListFullFailStreak} `
+          + `backoff=${HOST_LIST_FULL_FAIL_BACKOFF_MS}ms kept=${hostSessionListFullCache.items === null ? 'none' : hostSessionListFullCache.items.length}`);
       }
       return items;
+    } catch (err) {
+      hostSessionListFullFailStreak++;
+      hostSessionListFullNextAttemptAt = Date.now() + HOST_LIST_FULL_FAIL_BACKOFF_MS;
+      console.warn(`[HOST-LIST] session/list threw attempt=${hostSessionListFullFailStreak} backoff=${HOST_LIST_FULL_FAIL_BACKOFF_MS}ms error=${err && err.message}`);
+      return hostSessionListFullCache.items;
     } finally {
       hostSessionListFullInflight = null;
     }
   })();
   return hostSessionListFullInflight;
+}
+
+/**
+ * 同步窥视主通道缓存中的 session/list items（绝不发起/等待 RPC）。
+ * C-3：热路径只允许读取已知快照，缺失/过期时由 scheduleHostSessionListRefresh 后台刷新。
+ */
+function peekHostSessionListFull() {
+  return Array.isArray(hostSessionListFullCache.items) ? hostSessionListFullCache.items : null;
+}
+
+/**
+ * C-3/C-11：后台（fire-and-forget）刷新共享主通道；失败退避与单一在飞由主通道自身保证。
+ * 走 fetchHostSessionListData：成功快照会同时刷新 running/title 缓存并批量播种 live 镜像（C-11）。
+ */
+function scheduleHostSessionListRefresh(force = false) {
+  try {
+    const p = fetchHostSessionListData(force);
+    if (p && typeof p.then === 'function') p.catch(() => { /* 后台刷新失败静默：绝不进入任何请求的响应路径 */ });
+  } catch { /* 同步异常同样不得冒泡到请求路径 */ }
 }
 
 /**
@@ -1018,11 +1153,20 @@ async function fetchHostSessionListData(force = false) {
           if (!i || !i.sessionId) continue;
           const t = i.title || (i.projections && i.projections.values && i.projections.values.title);
           if (typeof t === 'string' && t) map.set(String(i.sessionId), t);
+          // C-20：由快照 cwd 登记 durable 目录（零磁盘 IO），供 /api/sessions/status 按需求值桥接
+          indexSessionDirByCwd(i.sessionId, i.cwd);
+        }
+        // C-11：成功快照批量播种 live 镜像（不覆盖更新的 live 事件事实），失败时绝不触碰镜像
+        if (hostLiveState) {
+          try { hostLiveState.noteListItems(items); } catch (err) {
+            console.warn(`[HOST-LIVE] noteListItems failed conn=${hostLiveState.getStreamId() || '-'} ${err && err.message}`);
+          }
         }
       }
-      hostRunningCache = { ids, at: ids === null ? 0 : reqNow };
-      hostTitleCache = { map, at: map === null ? 0 : reqNow };
-      return { ids, map };
+      // 失败（items === null）时保留既有 ids/map，绝不清空已知 running（C-4）
+      if (ids !== null) hostRunningCache = { ids, at: reqNow };
+      if (map !== null) hostTitleCache = { map, at: reqNow };
+      return { ids: hostRunningCache.ids, map: hostTitleCache.map };
     } finally {
       hostSessionListInflight = null;
     }
@@ -1050,27 +1194,312 @@ async function getHostRunningSessionIds(force = false) {
 }
 
 /**
- * 会话"运行中"判定（UI 用）：
- * - 本进程 active task 在跑 → true；
- * - flock 被占：宿主在线时该信号只说明"宿主持有会话写租约"（对它创建/收养过的
- *   会话永久持有，与是否在跑无关，实测确认），必须以宿主 session/list 的 running
- *   标志复核；宿主不可达时退回旧语义（离线模式下锁 = 子进程真的在跑）。
- * - 批量场景可直接传入 preloadedHostRunningIds 避免重复 await。
+ * C-3 同步窥视：已知 running 集合（无缓存即 null），绝不发起/等待宿主 RPC。
+ * 热路径一律用本函数，缺失/过期时调用 scheduleHostSessionListRefresh 后台刷新。
  */
-async function isSessionUiRunning(task, sessionDir, sessionId, forceFresh = false, preloadedHostRunningIds = undefined) {
-  if (task && task.status === 'running') return true;
-  if (!sessionDir || !(await isSessionLocked(sessionDir))) return false;
-  const hostRunning = (preloadedHostRunningIds !== undefined) ? preloadedHostRunningIds : (await getHostRunningSessionIds(forceFresh));
-  if (hostRunning === null) {
-    // 宿主 RPC 超时/不可达时：Fail-Safe 保守兜底，杜绝宿主历史写租约 flock 锁引发的全量虚假 running
-    const zstdPath = findSessionZstdPath(sessionDir);
-    const terminal = sessionTerminalState(zstdPath, null);
-    if (terminal === 'done' || terminal === 'stopped' || terminal === 'error') {
-      return false;
+/** C-3 同步窥视：已知宿主标题 Map（无缓存即 null）。 */
+function peekHostTitleMap() {
+  return (hostTitleCache.map !== null) ? hostTitleCache.map : null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 会话运行事实缓存（进程内，零宿主 RPC / 零磁盘 IO）
+//   生产者：isSessionUiRunning（/api/sessions 等热路径的实际判定结果）
+//   消费者：/api/sessions/status（C-18）——保证与 /api/sessions 口径一致（A8）
+// ─────────────────────────────────────────────────────────────────────────────
+const SESSION_RUNNING_FACT_TTL_MS = 60000;
+const SESSION_RUNNING_FACT_MAX = 5000;
+const sessionRunningFacts = new Map(); // sid -> { running, source, at }
+
+function noteSessionRunningFact(sessionId, running, source) {
+  const key = (sessionId === undefined || sessionId === null) ? '' : String(sessionId);
+  if (!key) return;
+  sessionRunningFacts.set(key, { running: !!running, source: source, at: Date.now() });
+  if (sessionRunningFacts.size > SESSION_RUNNING_FACT_MAX) {
+    const now = Date.now();
+    for (const [k, v] of sessionRunningFacts) {
+      if (now - v.at > SESSION_RUNNING_FACT_TTL_MS) sessionRunningFacts.delete(k);
+      if (sessionRunningFacts.size <= SESSION_RUNNING_FACT_MAX) break;
     }
+  }
+}
+
+function peekSessionRunningFact(sessionId) {
+  const key = (sessionId === undefined || sessionId === null) ? '' : String(sessionId);
+  if (!key) return null;
+  const hit = sessionRunningFacts.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > SESSION_RUNNING_FACT_TTL_MS) {
+    sessionRunningFacts.delete(key);
+    return null;
+  }
+  return hit;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 会话 durable 目录索引（进程内）：由既有磁盘扫描 / 宿主快照填充；
+// 仅在 C-20 桥接的按需定位中做一次有界查找（见 locateSessionDirForStatus），其余路径零磁盘 IO。
+// ─────────────────────────────────────────────────────────────────────────────
+const SESSION_DIR_INDEX_MAX = 20000;
+const sessionDirIndex = new Map(); // sid -> sessionDir
+
+function indexSessionDir(sessionId, sessionDir) {
+  const key = (sessionId === undefined || sessionId === null) ? '' : String(sessionId);
+  if (!key || !sessionDir) return;
+  if (sessionDirIndex.size >= SESSION_DIR_INDEX_MAX && !sessionDirIndex.has(key)) return;
+  sessionDirIndex.set(key, sessionDir);
+}
+
+/** 由宿主快照的 cwd 推导 durable 目录（零磁盘 IO；仅登记，不做存在性校验）。 */
+function indexSessionDirByCwd(sessionId, cwd) {
+  const key = (sessionId === undefined || sessionId === null) ? '' : String(sessionId);
+  if (!key || !cwd) return;
+  try {
+    indexSessionDir(key, path.join(SESSIONS_ROOT, projectKey(path.resolve(cwd)), key));
+  } catch { /* 非法 cwd：跳过索引 */ }
+}
+
+// C-25 尾部精确判定的短缓存（与 sessionTerminalState 同款 mtime+size 键）
+const TURN_TAIL_CACHE_TTL_MS = 2000;
+const turnTailCache = new Map();
+
+/**
+ * C-25：C-20 自带更精确的「回合未终结」判定。
+ * `sessionTerminalState()` 把 cancelled/aborted/interrupted/blocked 的 turn/end 也映射为 'stopped'，
+ * 与「未终结」不可区分，会把已取消会话在 300s 窗口内误报 running。此处独立判定：
+ * 仅当尾部最后一条终结性事件是进行中类事件（user/message、turn/start、step/start、tool/call、
+ * assistant/message）且其后无任何 turn/end 或 assistant/chunk(finish) 时才视为未终结。
+ * 不改动 sessionTerminalState 的既有语义。
+ */
+function transcriptTurnUnterminated(zstdPath) {
+  if (!zstdPath) return false;
+  try {
+    const st = fs.statSync(zstdPath);
+    const cacheKey = `${zstdPath}:${st.mtimeMs}:${st.size}`;
+    const now = Date.now();
+    const cached = turnTailCache.get(cacheKey);
+    if (cached && now - cached.at < TURN_TAIL_CACHE_TTL_MS) return cached.value;
+    const buf = fs.readFileSync(zstdPath);
+    const frames = scanZstdFrames(buf);
+    let value = false;
+    if (frames.length > 0) {
+      let tailText = '';
+      const maxFrames = Math.min(frames.length, 30);
+      for (let i = frames.length - maxFrames; i < frames.length; i++) {
+        try { tailText += zlib.zstdDecompressSync(buf.subarray(frames[i].start, frames[i].end)).toString('utf8'); } catch { /* skip corrupted frame */ }
+      }
+      let unterminated = false;
+      for (const line of tailText.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let o;
+        try { o = JSON.parse(trimmed); } catch { continue; }
+        if (o.type === 'turn/end') { unterminated = false; continue; }
+        if (o.type === 'assistant/chunk' && o.data && o.data.chunk && o.data.chunk.type === 'finish') { unterminated = false; continue; }
+        if (o.type === 'user/message' || o.type === 'turn/start' || o.type === 'step/start'
+          || o.type === 'tool/call' || o.type === 'assistant/message') {
+          unterminated = true;
+        }
+      }
+      value = unterminated;
+    }
+    if (turnTailCache.size > 500) turnTailCache.clear();
+    turnTailCache.set(cacheKey, { value, at: now });
+    return value;
+  } catch {
     return false;
   }
-  return hostRunning.has(String(sessionId));
+}
+
+/** C-20 桥接的同步 IO 部分：durable 尾部未终结（C-25 精确判定）+ mtime 新鲜。 */
+function coldStartBridgeByZstd(zstdPath) {
+  if (!zstdPath) return false;
+  if (sessionTerminalState(zstdPath, null) !== 'stopped') return false;
+  if (!transcriptTurnUnterminated(zstdPath)) return false;
+  try {
+    const st = fs.statSync(zstdPath);
+    return Date.now() - st.mtimeMs <= HOST_LIVE_BRIDGE_MTIME_MS;
+  } catch {
+    return false;
+  }
+}
+
+/** C-20 桥接（含 flock 前置）：与 isSessionUiRunning 完全同口径。 */
+async function coldStartBridgeRunning(sessionDir) {
+  if (!sessionDir) return false;
+  if (!(await isSessionLocked(sessionDir))) return false;
+  return coldStartBridgeByZstd(findSessionZstdPath(sessionDir));
+}
+
+// 未命中缓存（短 TTL）：重复查询未知 sid 不再产生磁盘 IO（C-18 P95 ≤300ms）
+const sessionDirMissIndex = new Map();
+const SESSION_DIR_MISS_TTL_MS = 30000;
+
+/**
+ * C-20 桥接所需的 durable 目录定位（有界 + 可缓存）：
+ *   1) 进程内索引命中 → 零磁盘 IO；
+ *   2) 已注册工作区（内存镜像 workspace.json）推导 projectKey 目录 → 逐目录 statSync（≤ 工作区数）；
+ *   3) 兜底：SESSIONS_ROOT 一级目录（≤ 项目目录数）逐个 statSync。
+ * 命中/未命中均入缓存，重复查询不再产生磁盘 IO。
+ * F4（安全）：入口先过 isValidSessionId，非法 id 直接返回 null，绝不参与任何 fs 路径拼接。
+ * 注意：C-18 的「零磁盘 IO」在「无任何权威事实」的 C-20 桥接路径上由 C-20 显式覆盖；
+ * 其余路径（有 live/list 权威事实或已有事实缓存）严格零磁盘 IO。
+ */
+function locateSessionDirForStatus(sessionId) {
+  const sid = (sessionId === undefined || sessionId === null) ? '' : String(sessionId);
+  if (!sid || !isValidSessionId(sid)) return null;
+  const hit = sessionDirIndex.get(sid);
+  if (hit) return hit;
+  const missAt = sessionDirMissIndex.get(sid);
+  if (missAt && Date.now() - missAt < SESSION_DIR_MISS_TTL_MS) return null;
+
+  const candidates = [];
+  try {
+    const doc = readWorkspaceDomain();
+    const tables = doc && doc.tables && doc.tables.workspaces;
+    if (tables) {
+      for (const ws of Object.values(tables)) {
+        if (!ws || typeof ws.path !== 'string') continue;
+        try { candidates.push(path.join(SESSIONS_ROOT, projectKey(path.resolve(ws.path)), sid)); } catch { /* 非法路径跳过 */ }
+      }
+    }
+  } catch { /* workspace 镜像不可读：继续兜底 */ }
+  try {
+    for (const p of fs.readdirSync(SESSIONS_ROOT)) candidates.push(path.join(SESSIONS_ROOT, p, sid));
+  } catch { /* SESSIONS_ROOT 不可读：无候选 */ }
+
+  for (const dir of candidates) {
+    try {
+      if (fs.statSync(dir).isDirectory()) {
+        indexSessionDir(sid, dir);
+        sessionDirMissIndex.delete(sid);
+        return dir;
+      }
+    } catch { /* 继续下一个候选 */ }
+  }
+  if (sessionDirMissIndex.size >= SESSION_DIR_INDEX_MAX) sessionDirMissIndex.clear();
+  sessionDirMissIndex.set(sid, Date.now());
+  return null;
+}
+
+/**
+ * G1：已知 session/list 快照的「新鲜度上限」（与主通道 TTL 一致）。
+ * 过期快照的缺席按未知处理；快照命中的 positive 事实仍可用于提升（绝不下压）。
+ */
+const HOST_SNAPSHOT_MAX_AGE_MS = HOST_LIST_FULL_TTL_MS;
+let hostSnapshotIndex = { items: null, map: null };
+
+/**
+ * G1：已知 list 快照的 sid→running 全量索引（含 false），过期或缺失返回 null。
+ * 只读主通道缓存，绝不发起/等待 RPC。
+ */
+function peekHostSnapshotRunningMap() {
+  const items = peekHostSessionListFull();
+  if (!Array.isArray(items)) return null;
+  const age = Date.now() - hostSessionListFullCache.at;
+  if (!(age >= 0) || age > HOST_SNAPSHOT_MAX_AGE_MS) return null;
+  if (hostSnapshotIndex.items === items && hostSnapshotIndex.map) return hostSnapshotIndex.map;
+  const map = new Map();
+  for (const i of items) {
+    if (!i || !i.sessionId) continue;
+    map.set(String(i.sessionId), !!i.running);
+  }
+  hostSnapshotIndex = { items: items, map: map };
+  return map;
+}
+
+/**
+ * G1/G2：会话运行判定的**唯一函数**（C-4 单点口径）。
+ * `/api/sessions` 行、`/api/session/prompt` 插队闸门、`/api/sessions/status` 三处全部调用本函数，
+ * 保证三者结论一致（避免「列表报 running 而 status 报非 running」的自激对账循环）。
+ *
+ * 顺序（严格 C-4 + G1）：
+ *   1) 本地 activeTask running → true（source 'task'，C-24）；
+ *   2) live 事件镜像持有该 sid 的权威事实（含 false）→ 直接采用（source 'live'）；
+ *   3) 已知 list 快照**命中该 sid**（含 false，且快照在新鲜度上限内）→ 采用（source 'list'）；
+ *      快照**未命中/过期** ⇒ 未知，**不得当作 false**，继续走桥接（G1）；
+ *   4) 进程内正向事实缓存（只提升，保证短窗口内三处同口径）；
+ *   5) C-20 冷启动桥接（只提升不降级）：flock 被占 && C-25 精确尾部未终结 && mtime ≤300s（source 'heuristic'）。
+ *
+ * @returns {Promise<{ isRunning: boolean, source: 'task'|'live'|'list'|'heuristic' }>}
+ */
+async function resolveSessionRunning(input) {
+  const opts = (input && typeof input === 'object') ? input : {};
+  const task = opts.task || null;
+  const sid = (opts.sid === undefined || opts.sid === null) ? '' : String(opts.sid);
+  if (opts.sessionDir && sid) indexSessionDir(sid, opts.sessionDir);
+
+  // 1) 本地 task（G2）
+  if (task && task.status === 'running') {
+    noteSessionRunningFact(sid, true, 'task');
+    return { isRunning: true, source: 'task' };
+  }
+  if (!sid) return { isRunning: false, source: 'heuristic' };
+
+  // 2) live 事件镜像（权威真源，含 false）
+  if (hostLiveState && hostLiveState.hasRunningTruth(sid)) {
+    const live = hostLiveState.getSession(sid);
+    const running = !!(live && live.running);
+    const source = hostLiveState.getSource(sid) || 'live';
+    noteSessionRunningFact(sid, running, source);
+    return { isRunning: running, source: source };
+  }
+
+  // 3) 已知 list 快照：仅「命中该 sid」才算权威（缺席/过期一律按未知）
+  const snapshot = peekHostSnapshotRunningMap();
+  if (snapshot && snapshot.has(sid)) {
+    const running = !!snapshot.get(sid);
+    noteSessionRunningFact(sid, running, 'list');
+    return { isRunning: running, source: 'list' };
+  }
+
+  // 4) 正向事实缓存（只提升）：短窗口内保证 /api/sessions 与 /api/sessions/status 同口径
+  const fact = peekSessionRunningFact(sid);
+  if (fact && fact.running) {
+    return { isRunning: true, source: fact.source || 'heuristic' };
+  }
+
+  // 5) C-20 冷启动桥接（只提升不降级）
+  const dir = opts.sessionDir || sessionDirIndex.get(sid) || locateSessionDirForStatus(sid);
+  const bridged = await coldStartBridgeRunning(dir);
+  // 负结论也入缓存（供诊断/防抖），但读取侧只采信正向事实
+  noteSessionRunningFact(sid, bridged, 'heuristic');
+  return { isRunning: bridged, source: 'heuristic' };
+}
+
+/**
+ * 会话"运行中"判定（UI 用）：resolveSessionRunning 的薄包装（保持既有调用签名）。
+ * forceFresh 只触发后台刷新，绝不在热路径等待宿主 RPC（C-3）。
+ */
+async function isSessionUiRunning(task, sessionDir, sessionId, forceFresh = false) {
+  if (forceFresh) scheduleHostSessionListRefresh(true);
+  const resolved = await resolveSessionRunning({ task: task, sessionDir: sessionDir, sid: sessionId });
+  return resolved.isRunning;
+}
+
+/**
+ * C-18/C-20/C-24/C-25：/api/sessions/status 的单 sid 事实（与 resolveSessionRunning 同口径）。
+ * known:true 表示持有权威事实（live/list/task）或桥接提升；known:false 表示无权威事实（前端严禁据此降级）。
+ */
+async function sessionStatusFact(sessionId) {
+  const sid = (sessionId === undefined || sessionId === null) ? '' : String(sessionId);
+  // F4：非法 id（含路径穿越）一律不参与任何 fs 访问
+  if (!sid || !isValidSessionId(sid)) return { isRunning: false, state: 'idle', known: false, source: '' };
+
+  // U1（C-24/G2）：必须把本地 activeTask 一并传入唯一判定函数。
+  // 否则宿主失联走 SDK 回退时，同一会话 /api/sessions 报 running 而 status 报非 running，
+  // 前端见 known:true&&!isRunning 即判 down 并置对账 cwd → 5s 自激 loadSessions 循环。
+  const resolved = await resolveSessionRunning({ task: activeTasks.get(sid), sid: sid });
+  if (resolved.isRunning) {
+    return { isRunning: true, state: 'running', known: true, source: resolved.source || 'heuristic' };
+  }
+  const authoritative = (resolved.source === 'live' || resolved.source === 'list' || resolved.source === 'task');
+  return {
+    isRunning: false,
+    state: 'idle',
+    known: authoritative,
+    source: authoritative ? resolved.source : '',
+  };
 }
 
 /**
@@ -2925,8 +3354,10 @@ async function getSessionsForCwd(targetCwd, filter = 'hide-archived') {
 
   const list = [];
 
-  // 批量前置解析宿主 running 集合与标题 Map（单次复用短缓存与 In-flight），避免循环中数百次 await
-  const hostRunningIds = await getHostRunningSessionIds();
+  // C-3：批量前置只读已知 running 快照（同步窥视，绝不等待宿主 RPC）；缺失/过期后台刷新。
+  // live 事件镜像的权威事实由 isSessionUiRunning 逐行优先消费（C-4）。
+  scheduleHostSessionListRefresh();
+  // （G1）快照口径已收敛到 resolveSessionRunning 单点：此处只负责后台刷新
 
   if (registeredSessionIds !== null) {
     // 官方工作区：单遍扫描建立 header.id → 目录索引（O(目录数)），
@@ -2985,7 +3416,7 @@ async function getSessionsForCwd(targetCwd, filter = 'hide-archived') {
           const zst = fs.statSync(zstdPath);
           const header = readSessionHeader(zstdPath);
           const task = activeTasks.get(sid);
-          const isRunning = await isSessionUiRunning(task, path.dirname(zstdPath), sid, false, hostRunningIds);
+          const isRunning = await isSessionUiRunning(task, path.dirname(zstdPath), sid);
           if (!isRunning && header && header.hasTurns === false) {
             continue; // 过滤无实质消息的 blank 会话
           }
@@ -3028,7 +3459,7 @@ async function getSessionsForCwd(targetCwd, filter = 'hide-archived') {
       if (normFilter === 'hide-archived' && isArchived) continue;
       if (normFilter === 'only-archived' && !isArchived) continue;
       const task = activeTasks.get(sid);
-      const isRunning = await isSessionUiRunning(task, sPath, sid, false, hostRunningIds);
+      const isRunning = await isSessionUiRunning(task, sPath, sid);
       if (!isRunning && header && header.hasTurns === false) {
         continue; // 过滤无实质消息的 blank 会话
       }
@@ -3084,7 +3515,9 @@ async function getUngroupedSessions() {
   }
   const list = [];
   const entries = fs.readdirSync(SESSIONS_ROOT);
-  const hostRunningIds = await getHostRunningSessionIds();
+  // C-3：只读已知快照（同步窥视），缺失/过期后台刷新
+  scheduleHostSessionListRefresh();
+  // （G1）快照口径已收敛到 resolveSessionRunning 单点：此处只负责后台刷新
   for (const entry of entries) {
     const fullDir = path.join(SESSIONS_ROOT, entry);
     let subdirs = null;
@@ -3107,7 +3540,7 @@ async function getUngroupedSessions() {
         if (registered.has(String(sid))) continue;
         if (header && header.origin === 'subagent') continue; // 对齐官方 sessionVisible
         const task = activeTasks.get(sid);
-        const isRunning = await isSessionUiRunning(task, sPath, sid, false, hostRunningIds);
+        const isRunning = await isSessionUiRunning(task, sPath, sid);
         if (!isRunning && header && header.hasTurns === false) continue;
         const zst = fs.statSync(zstdPath);
         const st = fs.statSync(sPath);
@@ -3143,11 +3576,22 @@ async function getUngroupedSessions() {
  */
 async function applyHostTitles(list) {
   try {
-    const map = await getHostTitleMap();
-    if (!map) return list;
+    // C-3：只读已知快照 + 后台刷新，绝不在热路径等待宿主 RPC
+    scheduleHostSessionListRefresh();
+    const map = peekHostTitleMap();
+    const liveTitles = hostLiveState ? hostLiveState.listAll() : [];
+    if (!map && liveTitles.length === 0) return list;
+    const liveById = new Map();
+    for (const row of liveTitles) {
+      if (row && row.sessionId && row.title) liveById.set(String(row.sessionId), row.title);
+    }
     for (const item of list) {
-      if (item && item.id && map.has(String(item.id))) {
-        item.title = map.get(String(item.id));
+      if (!item || !item.id) continue;
+      const key = String(item.id);
+      if (map && map.has(key)) {
+        item.title = map.get(key);
+      } else if (liveById.has(key)) {
+        item.title = liveById.get(key);
       }
     }
   } catch {}
@@ -3610,7 +4054,7 @@ function sanitizeErrorMessage(err) {
 /**
  * Read session directory and path for a given targetCwd and sessionId.
  */
-function findSessionDir(targetCwd, sessionId) {
+function findSessionDirUnindexed(targetCwd, sessionId) {
   if (!isValidSessionId(sessionId)) return null;
   const wsDir = findWorkspaceDir(targetCwd);
   if (!wsDir || !fs.existsSync(wsDir)) return null;
@@ -3685,6 +4129,15 @@ function findSessionDir(targetCwd, sessionId) {
   } catch {}
 
   return null;
+}
+
+/**
+ * 会话目录定位 + 进程内索引登记（供 C-20 桥接在 /api/sessions/status 上按需求值）。
+ */
+function findSessionDir(targetCwd, sessionId) {
+  const dir = findSessionDirUnindexed(targetCwd, sessionId);
+  if (dir) indexSessionDir(sessionId, dir);
+  return dir;
 }
 
 /**
@@ -4092,23 +4545,209 @@ function getSessionHistory(targetCwd, sessionId) {
 }
 
 /**
+ * 把 live 镜像行投影成 session/list item 形状（C-6/C-12 兜底：字段名/类型与宿主 items 一致）。
+ */
+function liveRowToSummaryItem(row) {
+  if (!row || !row.sessionId) return null;
+  const values = { title: row.title || '' };
+  if (Array.isArray(row.subagentCatalog)) values.subagentCatalog = row.subagentCatalog;
+  if (row.agentTeam && typeof row.agentTeam === 'object') values.agentTeam = row.agentTeam;
+  return {
+    sessionId: row.sessionId,
+    title: row.title || '',
+    running: !!row.running,
+    state: row.running ? 'running' : 'done',
+    agentAvailable: !!row.agentAvailable,
+    parentSessionId: row.parentSessionId || '',
+    origin: row.origin || '',
+    cwd: row.cwd || '',
+    updatedAt: row.updatedAt || 0,
+    projections: { values: values },
+  };
+}
+
+/**
+ * C-6/C-12：用 live 事件镜像覆盖/补全 session/list items。
+ * - 覆盖：running / title / updatedAt / parentSessionId / origin / cwd / 投影（live 事件为更高权威，C-4）；
+ * - 追加：session/list 缺失但 live 已知的行（如 LIST_FAIL 时的子会话）。
+ * 不改变既有字段名与类型（C-10）。
+ */
+function mergeLiveSessionItems(items) {
+  const base = Array.isArray(items) ? items : [];
+  if (!hostLiveState) return base;
+  let liveRows = [];
+  try { liveRows = hostLiveState.listAll(); } catch { liveRows = []; }
+  if (liveRows.length === 0) return base;
+  const liveById = new Map();
+  for (const row of liveRows) liveById.set(String(row.sessionId), row);
+
+  const merged = [];
+  const seen = new Set();
+  for (const item of base) {
+    if (!item || !item.sessionId) { merged.push(item); continue; }
+    const key = String(item.sessionId);
+    seen.add(key);
+    const row = liveById.get(key);
+    if (!row) { merged.push(item); continue; }
+    const values = Object.assign({}, (item.projections && item.projections.values) || {});
+    if (row.title) values.title = row.title;
+    if (Array.isArray(row.subagentCatalog) && row.subagentCatalog.length) values.subagentCatalog = row.subagentCatalog;
+    if (row.agentTeam && typeof row.agentTeam === 'object') values.agentTeam = row.agentTeam;
+    merged.push(Object.assign({}, item, {
+      running: !!row.running,
+      state: row.running ? 'running' : (item.state || 'done'),
+      title: row.title || item.title || '',
+      parentSessionId: row.parentSessionId || item.parentSessionId || '',
+      origin: row.origin || item.origin || '',
+      cwd: row.cwd || item.cwd || '',
+      updatedAt: row.updatedAt || item.updatedAt || 0,
+      projections: Object.assign({}, item.projections || {}, { values: values }),
+    }));
+  }
+  for (const row of liveRows) {
+    if (seen.has(String(row.sessionId))) continue;
+    const projected = liveRowToSummaryItem(row);
+    if (projected) merged.push(projected);
+  }
+  return merged;
+}
+
+/**
+ * C-21：单 sid 定向 `session/projections`（信封 `payload.args = { request: { sessionId } }`，
+ * 与 session/list 的 `{_request:{}}` 不同）。单飞 + 每 sid 15s 缓存，失败/超时/异常一律返回 null，
+ * 绝不抛错、绝不让上层端点失败。mock 模式经 callDshWebRpc 短路到 mock（返回空 value），不发真实 RPC。
+ */
+const PROJECTIONS_TTL_MS = 15000;
+// C-21 允许 ≤5000ms；此处取 2500ms：宿主对已终结/无投影会话可能长期不响应，
+// 收紧后单次响应最坏耗时仍落在 C-22 的 P95 ≤2500ms 口径内（失败再负缓存 15s，不重试风暴）。
+const PROJECTIONS_TIMEOUT_MS = 2500;
+const sessionProjectionsCache = new Map(); // sid -> { values, at }
+const sessionProjectionsInflight = new Map(); // sid -> Promise
+
+/** 返回 undefined=未缓存；null=负缓存命中（该 sid 当前取不到 projections）；对象=正缓存命中。 */
+function peekSessionProjections(sessionId) {
+  const sid = (sessionId === undefined || sessionId === null) ? '' : String(sessionId);
+  if (!sid) return undefined;
+  const hit = sessionProjectionsCache.get(sid);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > PROJECTIONS_TTL_MS) {
+    sessionProjectionsCache.delete(sid);
+    return undefined;
+  }
+  return (hit.values === undefined || hit.values === null) ? null : hit.values;
+}
+
+function fetchSessionProjections(sessionId) {
+  const sid = (sessionId === undefined || sessionId === null) ? '' : String(sessionId);
+  if (!sid || !isValidSessionId(sid)) return Promise.resolve(null);
+  const cached = peekSessionProjections(sid);
+  if (cached !== undefined) return Promise.resolve(cached);
+  const inflight = sessionProjectionsInflight.get(sid);
+  if (inflight) return inflight;
+  const p = (async () => {
+    try {
+      const res = await callDshWebRpc('session/projections', { sessionId: sid }, PROJECTIONS_TIMEOUT_MS);
+      if (res && res.ok && res.value && res.value.values && typeof res.value.values === 'object') {
+        sessionProjectionsCache.set(sid, { values: res.value.values, at: Date.now() });
+        if (sessionProjectionsCache.size > 2000) sessionProjectionsCache.clear();
+        return res.value.values;
+      }
+      // 负缓存（同 TTL）：宿主对已终结/无投影会话可能长期不响应，绝不能让面板每次重拉都等满超时
+      sessionProjectionsCache.set(sid, { values: null, at: Date.now() });
+      console.warn(`[HOST-PROJ] session/projections unavailable sid=${sid} attempt=1 error=${(res && (res.error || res.code)) || 'no-values'}`);
+      return null;
+    } catch (err) {
+      sessionProjectionsCache.set(sid, { values: null, at: Date.now() });
+      console.warn(`[HOST-PROJ] session/projections threw sid=${sid} attempt=1 ${err && err.message}`);
+      return null;
+    } finally {
+      sessionProjectionsInflight.delete(sid);
+    }
+  })();
+  sessionProjectionsInflight.set(sid, p);
+  return p;
+}
+
+/**
+ * C-21：把定向 projections 的 `subagentCatalog` + `agentTeam` 注入 items（保持既有字段名/类型），
+ * 让下方既有映射逻辑原样产出子会话/团队任务行。子会话 running 优先取 live 事实，缺失按 false。
+ * @returns {boolean} 是否注入了任何内容
+ */
+function applyProjectionsToItems(items, parentId, values) {
+  if (!Array.isArray(items) || !values || typeof values !== 'object') return false;
+  const catalog = Array.isArray(values.subagentCatalog) ? values.subagentCatalog : [];
+  const team = (values.agentTeam && typeof values.agentTeam === 'object') ? values.agentTeam : null;
+  const members = (team && Array.isArray(team.members)) ? team.members : [];
+  if (catalog.length === 0 && members.length === 0) return false;
+
+  let parent = items.find(s => s && s.sessionId === parentId);
+  const parentValues = Object.assign({}, (parent && parent.projections && parent.projections.values) || {});
+  if (catalog.length > 0) parentValues.subagentCatalog = catalog;
+  if (team) parentValues.agentTeam = team;
+  if (parent) {
+    // 不改写共享缓存对象：就地替换为浅拷贝（items 本身已是副本）
+    const idx = items.indexOf(parent);
+    parent = Object.assign({}, parent, {
+      projections: Object.assign({}, parent.projections || {}, { values: parentValues }),
+    });
+    items[idx] = parent;
+  } else {
+    parent = {
+      sessionId: parentId, title: '', running: false, state: 'done', origin: '', parentSessionId: '',
+      cwd: '', updatedAt: 0, projections: { values: parentValues },
+    };
+    items.push(parent);
+  }
+
+  const seen = new Set();
+  for (const it of items) {
+    if (it && it.sessionId) seen.add(String(it.sessionId));
+  }
+  const upsertChild = (id, title, running, extra) => {
+    if (!id || seen.has(String(id))) return;
+    seen.add(String(id));
+    const live = hostLiveState ? hostLiveState.getSession(id) : null;
+    const isRunning = live ? !!live.running : !!running;
+    items.push({
+      sessionId: String(id),
+      title: title || '',
+      running: isRunning,
+      state: isRunning ? 'running' : 'done',
+      origin: 'subagent',
+      parentSessionId: parentId,
+      cwd: (live && live.cwd) || '',
+      updatedAt: (extra && extra.updatedAt) || 0,
+      projections: { values: Object.assign({ title: title || '' }, (extra && extra.values) || {}) },
+    });
+  };
+  for (const c of catalog) {
+    if (!c || !c.id) continue;
+    upsertChild(c.id, c.label || '', false, { updatedAt: c.createdAt || 0, values: { subagent: { mode: c.mode, label: c.label } } });
+  }
+  for (const m of members) {
+    if (!m || !m.id) continue;
+    upsertChild(m.id, m.name || '', (m.phase === 'active' || m.status === 'running'), { values: {} });
+  }
+  return true;
+}
+
+/**
  * 获取指定父会话或工作区下的所有子智能体/Agent Team/后台任务列表。
  * 与官方 DSH 规范对齐：
  * 1. 优先调用官方 DSH Web session/list RPC 读取权威投影（subagentCatalog 与 parentSessionId 树状链）；
  * 2. 结合 projections.values.subagent 及 subagentCatalog 信息提炼模式（one-shot 后台任务、continuable 子Agent、team 等）；
  * 3. 结果按更新时间排序，带 isRunning / state 状态。
+ * C-3/C-6/C-21：只读已知快照（绝不等待主通道 RPC），session/list 不可用时用 live 镜像兜底；
+ * 会话级查询在既有真源全空时用单 sid 定向 session/projections 补全（≤1 次，单飞 + 15s 缓存）。
  */
 async function getSessionSubagents(targetCwd, parentSessionId) {
   if (!parentSessionId) return { parentId: parentSessionId || '', subagents: [], tasks: [] };
 
-  // 1. 读取官方 session/list RPC 权威列表（共享单飞 + 短缓存：开看板不再重发 2.4MB RPC，
-  //    实测慢链路单独超时在 6s 左右、全量解析需 9~16s，是看板加载失败的延迟主因）
-  const items = await fetchHostSessionListFull();
-
-  if (!Array.isArray(items)) {
-    return { parentId: parentSessionId, subagents: [], tasks: [] };
-  }
-
+  // 1. 读取官方 session/list 权威列表：命中共享主通道缓存即零等待；缺失/过期由后台刷新补齐（C-3），
+  //    live 事件镜像（C-6/C-12）兜底 parentSessionId 子会话与 agentTeam.tasks。
+  scheduleHostSessionListRefresh();
+  // .slice()：C-21 注入需要可变副本，绝不改写共享主通道缓存数组/对象
+  const items = mergeLiveSessionItems(peekHostSessionListFull()).slice();
   // 智能解析有效父会话：若传入的 parentSessionId 本身是 teammate/子智能体（带有 parentSessionId 或被其他 session 登记为 teammate），
   // 则自动追溯到它的根/主会话，确保在子智能体会话中按 U 也能完整看到整个团队与任务板！
   let effectiveParentId = parentSessionId;
@@ -4135,26 +4774,61 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
     }
   }
 
-  const parent = items.find(s => s && s.sessionId === effectiveParentId);
-  const catalog = (parent && parent.projections && parent.projections.values && Array.isArray(parent.projections.values.subagentCatalog))
+  let parent = items.find(s => s && s.sessionId === effectiveParentId);
+  let catalog = (parent && parent.projections && parent.projections.values && Array.isArray(parent.projections.values.subagentCatalog))
     ? parent.projections.values.subagentCatalog
     : [];
 
-  const teamData = (parent && parent.projections && parent.projections.values && parent.projections.values.agentTeam) || null;
-  const teamMembers = (teamData && Array.isArray(teamData.members)) ? teamData.members : [];
-  const teamTasks = (teamData && Array.isArray(teamData.tasks)) ? teamData.tasks : [];
+  let teamData = (parent && parent.projections && parent.projections.values && parent.projections.values.agentTeam) || null;
+  let teamMembers = (teamData && Array.isArray(teamData.members)) ? teamData.members : [];
+  let teamTasks = (teamData && Array.isArray(teamData.tasks)) ? teamData.tasks : [];
 
-  const teammateMap = new Map();
+  let teammateMap = new Map();
   for (const m of teamMembers) {
     if (m && m.id) teammateMap.set(m.id, m);
   }
 
-  const children = items.filter(s => {
+  let children = items.filter(s => {
     if (!s || s.sessionId === effectiveParentId) return false;
     if (s.parentSessionId === effectiveParentId) return true;
     if (teammateMap.has(s.sessionId)) return true;
     return catalog.some(c => c && c.id === s.sessionId);
   });
+
+  // C-21 触发条件（Lead 终验修正，缺陷 #3 残留缺口）：只要「已知权威信息不足以覆盖父会话的 catalog」
+  // 就对该单一 sid 做一次定向 session/projections 补全（单飞 + 15s 缓存；失败一律回落既有真源，绝不抛错）：
+  //   ① 无全量快照（冷启动窗口）或快照已过期 —— 权威信息缺失；
+  //   ② 既有真源未产出任何子会话/团队行（原条件）；
+  //   ③ children.length < catalog.length —— 快照/catalog 已知但行缺失（重启后仅 1 条 live 子会话即此情形）。
+  // 合并是**加性**的：applyProjectionsToItems 对已存在的 id 直接跳过，多执行一次不会产生重复行。
+  const snapshotItems = peekHostSessionListFull();
+  const snapshotUnusable = !Array.isArray(snapshotItems) || snapshotItems.length === 0
+    || (Date.now() - hostSessionListFullCache.at > HOST_SNAPSHOT_MAX_AGE_MS);
+  const coverageInsufficient = snapshotUnusable
+    || (children.length === 0 && teamMembers.length === 0 && teamTasks.length === 0)
+    || (children.length < catalog.length);
+  if (coverageInsufficient) {
+    const values = await fetchSessionProjections(effectiveParentId);
+    if (values && applyProjectionsToItems(items, effectiveParentId, values)) {
+      parent = items.find(s => s && s.sessionId === effectiveParentId);
+      catalog = (parent && parent.projections && parent.projections.values && Array.isArray(parent.projections.values.subagentCatalog))
+        ? parent.projections.values.subagentCatalog
+        : [];
+      teamData = (parent && parent.projections && parent.projections.values && parent.projections.values.agentTeam) || null;
+      teamMembers = (teamData && Array.isArray(teamData.members)) ? teamData.members : [];
+      teamTasks = (teamData && Array.isArray(teamData.tasks)) ? teamData.tasks : [];
+      teammateMap = new Map();
+      for (const m of teamMembers) {
+        if (m && m.id) teammateMap.set(m.id, m);
+      }
+      children = items.filter(s => {
+        if (!s || s.sessionId === effectiveParentId) return false;
+        if (s.parentSessionId === effectiveParentId) return true;
+        if (teammateMap.has(s.sessionId)) return true;
+        return catalog.some(c => c && c.id === s.sessionId);
+      });
+    }
+  }
 
   const subagents = children.map(ch => {
     const catEntry = catalog.find(c => c && c.id === ch.sessionId) || {};
@@ -4232,11 +4906,32 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
 }
 
 /**
+ * U2/F7：工作区归属判定（getWorkspaceSubagents 的 subagents 与 tasks 两处**必须同一判据**）。
+ * live 补入行可合法缺 cwd：缺 cwd 时仅当父会话 cwd 已知且等于 normalizedCwd 才纳入，
+ * 否则丢弃（宁缺勿串台，绝不把异工作区的子会话/团队任务混入本工作区看板）。
+ * @param {any} row session/list 形状行（或 live 投影行）
+ * @param {string} normalizedCwd 目标工作区绝对路径（空表示不做过滤）
+ * @param {Map<string, any>} sessionById 本次 items 的 sid 索引（用于父会话 cwd 推导）
+ */
+function belongsToWorkspace(row, normalizedCwd, sessionById) {
+  if (!normalizedCwd) return true;
+  if (!row) return false;
+  const rowCwd = row.cwd ? path.resolve(row.cwd) : '';
+  if (rowCwd) return rowCwd === normalizedCwd;
+  const parentId = row.parentSessionId ? String(row.parentSessionId) : '';
+  const parentRow = (parentId && sessionById) ? sessionById.get(parentId) : null;
+  const parentCwd = (parentRow && parentRow.cwd) ? path.resolve(parentRow.cwd) : '';
+  return parentCwd === normalizedCwd;
+}
+
+/**
  * 汇总当前工作区内所有带子智能体关系的会话概览，或全局子任务列表。
+ * C-3/C-6：只读已知快照 + 后台刷新；session/list 不可用时用 live 镜像兜底，绝不直接返回空。
  */
 async function getWorkspaceSubagents(targetCwd) {
-  const items = await fetchHostSessionListFull();
-  if (!Array.isArray(items)) {
+  scheduleHostSessionListRefresh();
+  const items = mergeLiveSessionItems(peekHostSessionListFull());
+  if (!Array.isArray(items) || items.length === 0) {
     return { cwd: targetCwd, subagents: [], tasks: [] };
   }
   const normalizedCwd = targetCwd ? path.resolve(targetCwd) : '';
@@ -4252,7 +4947,10 @@ async function getWorkspaceSubagents(targetCwd) {
     if (!ch) continue;
     const isSub = ch.origin === 'subagent' || !!ch.parentSessionId;
     if (!isSub) continue;
-    if (normalizedCwd && ch.cwd && path.resolve(ch.cwd) !== normalizedCwd) continue;
+    // F7/U2：live 补入行可合法缺 cwd。缺 cwd 时不得放行（否则异工作区子会话串台），
+    // 仅当父会话属于本工作区（父行 cwd 命中）时才纳入；否则丢弃（宁缺勿串台）。
+    // 判据与下方 tasks 通道共用 belongsToWorkspace，两处必须一致。
+    if (!belongsToWorkspace(ch, normalizedCwd, sessionById)) continue;
 
     const proj = (ch.projections && ch.projections.values) || {};
     const subMeta = proj.subagent || {};
@@ -4297,10 +4995,11 @@ async function getWorkspaceSubagents(targetCwd) {
   }
 
   // 额外收集：如果 items 中有带 agentTeam.tasks 的会话，且属于当前工作区，提取活跃任务
+  // U2（F7 修全）：tasks 与 subagents 两处必须**同一判据**，空 cwd 的 live 行不得放行。
   let teamTasks = [];
   for (const s of items) {
     if (!s) continue;
-    if (normalizedCwd && s.cwd && path.resolve(s.cwd) !== normalizedCwd) continue;
+    if (!belongsToWorkspace(s, normalizedCwd, sessionById)) continue;
     const p = (s.projections && s.projections.values) || {};
     if (p.agentTeam && Array.isArray(p.agentTeam.tasks) && p.agentTeam.tasks.length > 0) {
       teamTasks = teamTasks.concat(p.agentTeam.tasks);
@@ -5304,6 +6003,8 @@ const server = http.createServer((req, res) => {
       if (searchParams.get('refresh') === '1') {
         invalidateSessionsCache(cwd);
       }
+      // C-3：热路径只读已知快照，宿主刷新一律后台化（fire-and-forget）
+      scheduleHostSessionListRefresh();
       const sessions = await getSessionsForCwdCached(cwd, filter);
       console.log(`[API /api/sessions] resolved ${sessions.length} sessions for cwd: ${cwd} in ${Date.now() - sessT0}ms`);
       sendJson(res, 200, sessions);
@@ -5311,6 +6012,27 @@ const server = http.createServer((req, res) => {
       console.error(`[API /api/sessions ERROR] ${err.stack || err.message}`);
       sendJson(res, 500, { error: sanitizeErrorMessage(err) }, req);
     }
+    return;
+  }
+
+  // 轻量运行状态端点（契约 C-8 v1.2 / C-18 / C-20）：纯内存读，零宿主 RPC、零磁盘 IO。
+  // 响应：{ ok:true, at:<ms>, states:{ "<sid>":{ isRunning, state, known, source } } }
+  if (req.method === 'GET' && pathname === '/api/sessions/status') {
+    const idsRaw = searchParams.get('ids');
+    if (idsRaw === null) {
+      sendJson(res, 400, { ok: false, error: 'Missing query parameter "ids"' }, req);
+      return;
+    }
+    const ids = String(idsRaw).split(',').map((s) => s.trim()).filter(Boolean).slice(0, 60);
+    // F6：无原型对象，保证任意 id（含 __proto__/constructor）都能作为自有键出现在 JSON 响应里
+    const states = Object.create(null);
+    for (const sid of ids) {
+      // F4：非法 id（含路径穿越）不进任何 fs 路径，直接给 known:false 形状
+      states[sid] = isValidSessionId(sid)
+        ? await sessionStatusFact(sid)
+        : { isRunning: false, state: 'idle', known: false, source: '' };
+    }
+    sendJson(res, 200, { ok: true, at: Date.now(), states }, req);
     return;
   }
 
@@ -5977,11 +6699,23 @@ const server = http.createServer((req, res) => {
       return;
     }
     const promptMode = (mode === 'steer') ? 'steer' : 'queue';
-    let task = activeTasks.get(sessionId);
-    // 如果当前会话客观在宿主上运行（但因为服务刚重启或客户端直连，task 尚未被 activeTasks 捕获）
-    const hostRunningIds = await getHostRunningSessionIds(true);
-    const isHostRunning = hostRunningIds && hostRunningIds.has(sessionId);
-    if ((!task || task.status !== 'running') && !isHostRunning) {
+    const task = activeTasks.get(sessionId);
+    // C-7 + G1：插队/排队闸门与 /api/sessions、/api/sessions/status 共用**唯一判定函数**
+    // （本地 task running → live 权威事实 → 快照命中 → 事实缓存 → C-20 冷启动桥接），
+    // 保证三处同口径，且绝不因 session/list 失败/未跑而拒绝（缺陷 #4 根因）。
+    const sidKey = String(sessionId);
+    let gate = { isRunning: false, source: 'heuristic' };
+    try {
+      const bridgeCwd = (body && typeof body.cwd === 'string') ? body.cwd : '';
+      const gateDir = sessionDirIndex.get(sidKey)
+        || (bridgeCwd ? findSessionDir(bridgeCwd, sidKey) : null);
+      gate = await resolveSessionRunning({ task: task, sessionDir: gateDir, sid: sidKey });
+    } catch (err) {
+      // 判定异常一律回落既有拒绝行为，绝不抛错
+      gate = { isRunning: false, source: 'heuristic' };
+      console.warn(`[PROMPT GATE] running resolution failed (non-fatal) sid=${sidKey} ${err && err.message}`);
+    }
+    if (!gate.isRunning) {
       sendJson(res, 200, { ok: false, error: 'session not running' });
       return;
     }
@@ -6718,6 +7452,98 @@ process.on('unhandledRejection', (reason, promise) => {
 const PORT = parseInt(process.env.PORT || '3090', 10);
 const HOST = process.env.HOST || '127.0.0.1';
 
+/**
+ * C-16：Q20_MOCK_HOST=1 时按 §1.4 接缝同步播种 live 真源（不建真实 WS）。
+ *   RUNNING_SESSIONS → status 事实；SUBAGENTS → added 事实。
+ * 只在 mock 分支调用；生产路径绝不读取这些环境变量。
+ */
+function seedMockLiveTruth(state) {
+  const runningIds = mockSeamRunningIds();
+  for (const sid of runningIds) {
+    state.noteEvent('api-session/status', [sid, true]);
+  }
+  for (const sub of mockSeamSubagents()) {
+    state.noteEvent('api-session/added', [{
+      sessionId: sub.sessionId,
+      running: sub.running !== undefined ? !!sub.running : runningIds.indexOf(sub.sessionId) >= 0,
+      parentSessionId: sub.parentSessionId || '',
+      origin: sub.origin || 'subagent',
+      cwd: sub.cwd || '',
+      title: sub.title || '',
+      updatedAt: Date.now(),
+      projections: { values: { title: sub.title || '', subagent: sub } },
+    }]);
+  }
+}
+
+/**
+ * C-23：常驻 live 流对**每一条** waterfall 帧立即委托回瀑布（否则宿主侧提问/审批永久挂起）。
+ * 信封与既有 settleUserEvent 完全一致（rawArgs → payload.args = { clientId, eventId, outcome }）。
+ * 语义「本 client 不认领」；失败只记日志，绝不抛错、绝不阻塞帧循环。
+ */
+function declineHostWaterfall(info) {
+  const clientId = (info && info.clientId) ? String(info.clientId) : '';
+  const eventId = (info && info.eventId) ? String(info.eventId) : '';
+  const eventName = (info && info.event) ? String(info.event) : '';
+  const conn = (info && info.conn) ? String(info.conn) : '-';
+  if (!clientId || !eventId) {
+    console.warn(`[HOST-LIVE] waterfall decline skipped conn=${conn} event=${eventName} eventId=${eventId || '-'}`);
+    return;
+  }
+  try {
+    Promise.resolve(callDshWebRpc('$events/result', { clientId, eventId, outcome: { kind: 'next' } }, 10000, { rawArgs: true }))
+      .then((res) => {
+        if (!res || !res.ok) {
+          console.warn(`[HOST-LIVE] waterfall decline failed conn=${conn} event=${eventName} eventId=${eventId} clientId=${clientId} error=${(res && (res.error || res.code)) || 'unknown'}`);
+        }
+      })
+      .catch((err) => {
+        console.warn(`[HOST-LIVE] waterfall decline threw conn=${conn} event=${eventName} eventId=${eventId} clientId=${clientId} ${err && err.message}`);
+      });
+  } catch (err) {
+    console.warn(`[HOST-LIVE] waterfall decline sync-error conn=${conn} event=${eventName} eventId=${eventId} ${err && err.message}`);
+  }
+}
+
+/**
+ * C-9/C-14/C-16：进程启动（listen 回调内）建立 live 状态单例并启动 $events 订阅。
+ * - 生产路径注入真实 mux 连接参数（WebSocketImpl + url + headers），订阅必须真正在线，禁止静默 no-op；
+ * - Q20_MOCK_HOST=1 不注入 transport（start() 安全 no-op），改由 §1.4 接缝同步播种真源；
+ * - C-11：同时发起一次异步非阻塞的 session/list 冷启动播种（失败/超时不影响任何 API）。
+ */
+function startHostLiveState() {
+  let WebSocketImpl = null;
+  let url = '';
+  let headers = {};
+  if (!Q20_MOCK_HOST) {
+    WebSocketImpl = loadWsModule();
+    if (WebSocketImpl) {
+      const authority = new URL(DSH_WEB_URL).host;
+      url = DSH_WEB_URL.replace(/^http/, 'ws') + '/api/remote.mux';
+      headers = { Host: authority, Origin: DSH_WEB_URL, Cookie: getDshWebAuthCookie(authority) || '' };
+    } else {
+      console.warn('[HOST-LIVE] ws module unavailable conn=-; $events subscription disabled (仅靠 session/list 播种)');
+    }
+  }
+  hostLiveState = createHostLiveState({
+    log: (msg) => console.log(msg),
+    WebSocketImpl: WebSocketImpl,
+    url: url,
+    headers: headers,
+    onWaterfallDecline: declineHostWaterfall, // C-23：常驻流必须委托回瀑布
+  });
+  if (Q20_MOCK_HOST) seedMockLiveTruth(hostLiveState);
+  hostLiveState.start();
+  if (Q20_MOCK_HOST) {
+    console.log('[HOST-LIVE] mock host conn=' + (hostLiveState.getStreamId() || '-')
+      + ': real WS disabled; live truth seeded from §1.4 seams (running='
+      + mockSeamRunningIds().length + ', subagents=' + mockSeamSubagents().length + ')');
+  }
+  // C-11：冷启动播种（共享主通道，单一在飞 + 失败退避；绝不进入任何请求的热路径）
+  scheduleHostSessionListRefresh();
+  return hostLiveState;
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
   checkWeakAuthToken();
   const isLoopbackBind = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
@@ -6732,6 +7558,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
   });
   server.listen(PORT, HOST, () => {
     console.log(`DeepSeek Harness Server running at http://${HOST}:${PORT}`);
+    // 契约 C-9/C-11/C-14/C-16：启动即建立常驻 $events 权威状态镜像并播种
+    try {
+      startHostLiveState();
+    } catch (err) {
+      console.error(`[HOST-LIVE] start failed conn=- (non-fatal): ${err && err.stack ? err.stack : err.message}`);
+    }
     if (isLoopbackBind) {
       console.log('[BIND] WARN: 仅回环监听，非本机来源不可达；公网 Ingress 回源将 502。生产/公网入口须 HOST=0.0.0.0 启动。');
     } else {

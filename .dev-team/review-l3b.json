@@ -1,0 +1,47 @@
+{
+  "verdict": "FAIL",
+  "findings": [
+    {
+      "file": "lib/host-live-state.mjs",
+      "line": 361,
+      "rule": "协议保真/上游语义：$events 的 waterfall 帧必须经 $events/result 回 {kind:'next'} 结算；静默忽略等于给宿主 waterfall 永久增加一个不结算的 delivery",
+      "counterexample": "常驻 live 订阅是独立 mux client（server.mjs:7230-7259 自建 WebSocket + streamId 'q20-live-*'）。网关把每条 waterfall 投递给所有 client（packages/api/gateway/src/index.ts:546 broadcast 逐 client push、:602 startRemoteEvent 逐 client deliver、:513 新开流还会收到全部 pending waterfall 重放），且只在 pending.deliveries.size===0 时 settle（同文件 :614-632 receiveRemoteEventResult）。host-live-state.mjs:352-362 只处理 frame.type==='item' 且 value.event 为字符串的帧，对 value.type==='waterfall' 只做 noteEvent（未知事件 no-op），从不发 $events/result（全仓库 grep '$events/result' 仅命中 server.mjs:1493 的 per-task 通道）。复现：Q20 任务流对非本会话提问立即回 next（server.mjs:1532，规则见 lib/ask-ownership.mjs:18 注释“本院落会错误地参与结算”），此刻 deliveries 只剩常驻 live 流 → 永不 settle → 子智能体/异会话的 user-questions/request 与 approval/request 在宿主侧永久挂起（修复前该帧立即 settle）。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 1269,
+      "rule": "C-20 与既有 sessionTerminalState 语义冲突：'stopped' 同时表示“回合未终结”与“已 cancelled/interrupted 终结”，桥接把后者误判为 running",
+      "counterexample": "durable 尾部为 {\"type\":\"turn/end\",\"data\":{\"reason\":{\"kind\":\"cancelled\"}}}（用户按 X 中止）时 sessionTerminalState 返回 'stopped'（server.mjs:4107-4115 把 cancelled/aborted/interrupted/blocked 全部映射为 stopped，与 4097-4105 的“无 turn/end”不可区分）；此时 mtime 新鲜且 flock 被宿主持有（server.mjs:1194-1200 注释：宿主对创建/收养的会话永久持有写租约，与是否在跑无关）→ coldStartBridgeByZstd 返回 true。当 hasRunningTruth(sid)===false（冷启动首次 session/list 未返回，C-17 实测 474435ms）时，isSessionUiRunning 走 C-20 分支返回 true，/api/sessions 该行报 isRunning:true/state:'running'，/api/sessions/status 报 {isRunning:true,state:'running',known:true,source:'heuristic'}，最长持续 300s（HOST_LIVE_BRIDGE_MTIME_MS）。"
+    },
+    {
+      "file": "lib/host-live-state.mjs",
+      "line": 357,
+      "rule": "帧形状漂移：未判别 RemoteEventDownlinkFrame.type，把 waterfall 的 request.args 当作 emit 的 args",
+      "counterexample": "node 实测（import ./lib/host-live-state.mjs + 注入 FakeWebSocket，触发 open 后喂帧）：{\"type\":\"item\",\"value\":{\"type\":\"waterfall\",\"event\":\"api-session/status\",\"eventId\":\"e1\",\"agentId\":\"a1\",\"request\":{\"args\":[\"session-XYZ\",true]}}} → getSession('session-XYZ').running===true、hasRunningTruth('session-XYZ')===true、getSource==='live'、getRunningIds() 含 session-XYZ。上游 RemoteEventInvocationFrame 无 args 字段（packages/api/gateway/src/stream-protocol.ts:52-58），handleFrame 却接受该非契约帧并把它升级为权威 live running 事实（污染 /api/sessions 与 /api/sessions/status）。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 1298,
+      "rule": "安全/路径穿越：locateSessionDirForStatus 未过 isValidSessionId 白名单（对比 server.mjs:3970 findSessionDirUnindexed）即用用户输入拼接 fs 路径",
+      "counterexample": "ids 直接来自查询串且零校验（server.mjs:5764 → 5767）。`GET /api/sessions/status?ids=../../../../../etc`：本机 node 实测 path.join('<DSH_HOME>/sessions', p, '../../../../../etc') === '/etc'，且 fs.statSync('/etc').isDirectory()===true → locateSessionDirForStatus 返回 '/etc'（server.mjs:1321-1327），随后 coldStartBridgeRunning 对穿越目录执行 isSessionLocked（server.mjs:3163-3166，若存在 <dir>/session.lock 会以 'w' 打开）、findSessionZstdPath（readdirSync）、sessionTerminalState（fs.readFileSync 整个 *.jsonl.zstd）。可达性受服务端 Cookie/loopback 门禁限制（server.mjs:5690-5696），但违反仓库自定的 P0 输入白名单。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 1346,
+      "rule": "C-18/C-20 契约：source 字段取值被冻结为 'live'|'list'|'heuristic'，实现引入了枚举外取值 'task'",
+      "counterexample": "noteSessionRunningFact(sessionId, true, 'task') 写入 fact.source='task'（server.mjs:1346）；sessionStatusFact 在无 live 权威事实时直接回传 fact.source（server.mjs:1389-1392）。复现：本进程 activeTask.status==='running' 且该 sid 尚无 live/list 权威事实（新建会话、list 未回）→ `GET /api/sessions/status?ids=<sid>` 返回 {\"isRunning\":true,\"state\":\"running\",\"known\":true,\"source\":\"task\"}，超出 C-20 冻结枚举。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 5765,
+      "rule": "C-18 响应形状：states 用普通对象字面量承载攻击者可控键，__proto__ 键使该 sid 条目从响应中消失",
+      "counterexample": "node 实测：var s={}; s['__proto__']={isRunning:false,state:'idle'}; JSON.stringify({ok:true,states:s}) === '{\"ok\":true,\"states\":{}}'（hasOwnProperty 为 false）。对应 `GET /api/sessions/status?ids=__proto__`（server.mjs:5764-5769）返回的 states 中不存在该键，违反 C-18“未知 sid 返回 {isRunning:false,state:'idle'}”。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 4692,
+      "rule": "跨工作区隔离：live 镜像补入的行可合法缺 cwd（上游 SessionSummary.cwd 可选），而工作区过滤条件 `ch.cwd &&` 对空 cwd 放行",
+      "counterexample": "上游 packages/api/session-controller/src/types.ts:186 声明 `readonly cwd?: string`。宿主帧 api-session/added [{sessionId:'s-x',parentSessionId:'p',origin:'subagent',projections:{values:{title:'other-ws-agent'}}}]（无 cwd）→ 镜像行 cwd=''（lib/host-live-state.mjs:121-123 只在 summary.cwd!==undefined 时赋值）→ mergeLiveSessionItems 以 cwd:'' 追加该行（server.mjs:4475、4519-4522）→ `GET /api/session/subagents?cwd=<workspaceA>`（无 id 走 getWorkspaceSubagents，server.mjs:5985）中 ch.origin==='subagent' 使 isSub 成立（:4690），ch.cwd 为空使 :4692 的过滤不生效 → 该行被 push 且 cwd 被改写为 targetCwd（:4732），其它工作区的子会话标题进入 workspaceA 的 U 看板。"
+    }
+  ]
+}
