@@ -63,6 +63,12 @@ Q20 设备侧出现 5 个可复现缺陷，且互相同源：
   这是对 C-18「零磁盘 IO」字面的一处显式取舍；其余路径严格零磁盘 IO（未命中缓存 TTL 30s）。
 - 宿主 `$events` 长连存在被宿主心跳终止后的重连间隙（重连期间的事件会丢），已按 C-14 打 `[HOST-LIVE]` 可 grep 日志；
   影响窗口为秒级，最终由下一次事件或播种纠正。
+- **既有运维脆弱性（本次 A/B 发现，非本波引入，未在本次范围内修）**：全库扫描类端点 `/api/sessions/ungrouped`
+  会同步读取数千个会话的 durable 尾部，实测阻塞事件循环 ≈4s（旧代码 3.85s / 新代码 2.59s，同量级）；
+  叠加并发请求时 `q20-watchdog` 的 5s `/healthz` 探活会超时并触发 `systemctl restart`（本机今日 3 次，均发生在
+  重负载测试期间）。正常单设备使用不受影响。若要根治，应把该扫描改为分片异步 + 让看门狗探活独立于业务事件循环，
+  属独立事项（不在本次 5 缺陷闭包内）。
+
 - 相关前案：[chat-tail-session-status-indicator](.agents/notes/implemented/feature/2026-09-18-chat-tail-session-status-indicator.md)、
   [strict-session-isolation-for-subagent-panel](.agents/notes/implemented/bug-fix/2026-10-12-strict-session-isolation-for-subagent-panel.md)、
   [queue-steer-dock-bubble-style](.agents/notes/implemented/feature/2026-09-23-queue-steer-dock-bubble-style.md)（插队交互与状态口径延续）。

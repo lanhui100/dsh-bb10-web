@@ -40,3 +40,16 @@
 2. `$events` 长连被宿主心跳终止后的秒级重连间隙内事件会丢，由下一次事件或播种纠正（`[HOST-LIVE]` 可 grep）。
 3. `/api/sessions/status` 在「无任何权威事实」路径做一次有界可缓存的 durable 目录定位（其余路径零磁盘 IO）。
 4. 冷 `/api/bootstrap` ≈12s 为宿主依赖的既有环境特性（A/B 证明与本次改动无关）。
+5. 既有运维脆弱性（A/B 发现，非本波引入）：`/api/sessions/ungrouped` 全库同步扫描阻塞事件循环 ≈4s（旧 3.85s / 新 2.59s），
+   重负载下会让 `q20-watchdog` 的 5s `/healthz` 探活超时并触发重启；单设备正常使用无影响，根治属独立事项。
+
+## 部署核验（2026-10-16）
+
+| 项 | 结果 |
+| :--- | :--- |
+| 运行代码 = 已提交修订 | `server.mjs` / `static/index.html` / `lib/host-live-state.mjs` 与 `HEAD` sha256 一致 |
+| 本机服务 | `dsh-q20-web.service` active；`q20-watchdog.timer` active；`/healthz` 200 |
+| 公网入口（Q20 设备路径） | `GET /healthz` → 200；BB10 UA 下 `GET /` → 200 且字节数与本地一致（572157） |
+| 鉴权门禁 | 未认证 `/api/*` 与默认 UA 均 403（EdgeOne 机器人防护 + 应用鉴权），预期行为 |
+| 推送 | `origin/main` `1317c05..49af44b`；tag `wave-2026-10-16` / `wave-2026-10-16-red` 已推送；pre-push 门禁 `secret-scan clean, npm test green` |
+
