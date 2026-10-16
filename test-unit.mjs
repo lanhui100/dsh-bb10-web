@@ -1327,6 +1327,8 @@ async function main() {
         '!sessionModelDirty[sid]',                       // stats 回写守卫：本地选取未确认(脏)前不得回滚
         'sessionModelDirty[data.sessionId] = false',     // start 回执确认后解除脏标记
         'sessionModelDirty[currentSessionId] = true',    // 面板选取/D 键标记脏
+        'modelBadge.onclick',                            // 点击模型徽标唤起模型列表
+        'wsBadge.onclick',                               // 点击工作区徽标唤起工作区列表
       ];
       for (const wn of wireNeedles) {
         if (html.indexOf(wn) === -1) throw new Error(`session-model wiring missing in index.html: ${wn}`);
@@ -1337,7 +1339,7 @@ async function main() {
       if (panelIdx < 0 || badgeIdx < 0) throw new Error('O panel / badge must consult session model store first');
       return {
         pureLogic: ['record/get roundtrip', 'empty guard', 'cap 40 evict-oldest'],
-        wiring: ['O panel', 'M badge', 'switch restore', 'send bind', 'new-session late bind', 'M-panel pick', 'stats truth', 'dirty guard', 'start ack clears dirty'],
+        wiring: ['O panel', 'M badge', 'switch restore', 'send bind', 'new-session late bind', 'M-panel pick', 'stats truth', 'dirty guard', 'start ack clears dirty', 'modelBadge.onclick', 'wsBadge.onclick'],
       };
     });
 
@@ -2361,7 +2363,7 @@ async function main() {
       const gzipHeaders = { 'Accept-Encoding': 'gzip' };
 
       // 14.1 /api/bootstrap 请求 gzip → Content-Encoding: gzip 且可解压为合法 JSON
-      const resGzip = await httpRequest(`/api/bootstrap?cwd=${encodeURIComponent(currentCwd)}`, { headers: gzipHeaders });
+      const resGzip = await httpRequest(`/api/bootstrap?cwd=${encodeURIComponent(currentCwd)}`, { headers: gzipHeaders, timeout: 30000 });
       if (resGzip.status !== 200) {
         throw new Error(`Expected 200 for gzipped bootstrap, got ${resGzip.status}`);
       }
@@ -2374,7 +2376,7 @@ async function main() {
       }
 
       // 14.1b 无 Accept-Encoding → 行为不变（无压缩，JSON 可直接解析）
-      const resPlain = await httpRequest(`/api/bootstrap?cwd=${encodeURIComponent(currentCwd)}`);
+      const resPlain = await httpRequest(`/api/bootstrap?cwd=${encodeURIComponent(currentCwd)}`, { timeout: 30000 });
       if (resPlain.status !== 200 || resPlain.headers['content-encoding']) {
         throw new Error(`Plain bootstrap must stay uncompressed, got ${resPlain.status}/${resPlain.headers['content-encoding']}`);
       }
@@ -2793,7 +2795,7 @@ async function main() {
         if (resGhost.status !== 404) throw new Error(`unknown attachment must be 404, got ${resGhost.status}`);
 
         // --- /api/file：注册工作区内 markdown 引用文件 ---
-        const boot = await httpRequest('/api/bootstrap');
+        const boot = await httpRequest('/api/bootstrap', { timeout: 30000 });
         if (boot.status !== 200 || !Array.isArray(boot.body?.workspaces)) {
           throw new Error(`bootstrap unavailable for /api/file probe: ${boot.status}`);
         }
