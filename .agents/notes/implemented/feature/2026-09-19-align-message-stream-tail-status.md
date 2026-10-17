@@ -1,5 +1,7 @@
 # ADR: 对齐 DSH 会话消息流底部状态驱动机制
 
+Status: implemented
+
 - **日期**: 2026-09-19
 - **状态**: implemented
 

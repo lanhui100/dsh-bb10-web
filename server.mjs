@@ -2929,7 +2929,48 @@ async function readModelCatalog() {
 const SESSION_HEADER_PREFIX_BYTES = 64 * 1024;
 const BLANK_SESSION_MAX_BYTES = 4096;
 
+/**
+ * 转录头解析缓存（键：zstd 路径；指纹：mtimeMs + size）。
+ *
+ * 动机：工作区树与会话列表每次刷新都要逐条解析转录头部（64KB 前缀 + zstd 解压），
+ * 才能拿到 id / cwd / 标题 / hasTurns。本机 sessions 树已达 4000+ 转录、1.4GB，
+ * 一次全树解析是 7~8 秒同步 CPU，把事件循环整个占死：/api/bootstrap 冷启动
+ * 10~15s、/healthz 最大阻塞 7.5s，手机端首屏即表现为"服务打不开"。
+ * 转录只会在尾部追加，mtime/size 变化即代表需要重解析；未变化直接命中，
+ * 全树扫描因此退化为 stat-only。
+ */
+const SESSION_HEADER_CACHE_MAX = 12000;
+const sessionHeaderCache = new Map();
+
 function readSessionHeader(filePath) {
+  try {
+    const fileStat = fs.statSync(filePath);
+    const cached = sessionHeaderCache.get(filePath);
+    if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.size === fileStat.size) {
+      // 浅拷贝：调用方可能就地修改 header 字段，缓存对象不得被污染
+      return cached.header ? Object.assign({}, cached.header) : null;
+    }
+    const header = parseSessionHeaderUncached(filePath);
+    if (sessionHeaderCache.size >= SESSION_HEADER_CACHE_MAX) {
+      // FIFO 淘汰（Map 保持插入序）：一次砍掉 1/4，避免无界增长与逐条删除开销
+      let drop = Math.ceil(SESSION_HEADER_CACHE_MAX / 4);
+      for (const key of sessionHeaderCache.keys()) {
+        sessionHeaderCache.delete(key);
+        if (--drop <= 0) break;
+      }
+    }
+    sessionHeaderCache.set(filePath, {
+      mtimeMs: fileStat.mtimeMs,
+      size: fileStat.size,
+      header: header ? Object.assign({}, header) : null,
+    });
+    return header;
+  } catch {
+    return null;
+  }
+}
+
+function parseSessionHeaderUncached(filePath) {
   try {
     const fileStat = fs.statSync(filePath);
     const fd = fs.openSync(filePath, 'r');
@@ -3177,6 +3218,69 @@ function getWorkspaces() {
   workspacesCache = Array.from(workspacesMap.values()).sort((a, b) => b.sessionCount - a.sessionCount);
   workspacesCacheAt = Date.now();
   return workspacesCache;
+}
+
+/**
+ * 启动预热：把全树转录头解析摊到多个事件循环轮次里做完。
+ *
+ * 冷启动后首次 /api/bootstrap 若撞上空白缓存，仍要一次性解压全树（7~8s）——
+ * 恰是最糟的首屏时刻。listen 成功后以 setImmediate 分批（每批 24 条）预热，
+ * 单批耗时约 40~60ms，既让 /healthz 等请求保持可响应，又让首屏请求撞到热缓存。
+ * 预读只做只读解析，不产生任何写副作用；Q20_DISABLE_HEADER_WARM=1 可关闭（测试用）。
+ */
+const SESSION_HEADER_WARM_BATCH = 24;
+let sessionHeaderWarmStarted = false;
+
+function warmSessionHeaderCacheAsync() {
+  if (sessionHeaderWarmStarted || process.env.Q20_DISABLE_HEADER_WARM === '1') return;
+  sessionHeaderWarmStarted = true;
+
+  const queue = [];
+  try {
+    for (const wsEntry of fs.readdirSync(SESSIONS_ROOT)) {
+      const wsDir = path.join(SESSIONS_ROOT, wsEntry);
+      let subdirs;
+      try {
+        if (!fs.statSync(wsDir).isDirectory()) continue;
+        subdirs = fs.readdirSync(wsDir);
+      } catch {
+        continue;
+      }
+      for (const sub of subdirs) {
+        if (sub.startsWith('.')) continue;
+        const sPath = path.join(wsDir, sub);
+        try {
+          if (!fs.statSync(sPath).isDirectory()) continue;
+          const zstdPath = findSessionZstdPath(sPath);
+          if (zstdPath) queue.push(zstdPath);
+        } catch {
+          // ignore unreadable dirs
+        }
+      }
+    }
+  } catch {
+    return;
+  }
+  if (queue.length === 0) return;
+
+  let idx = 0;
+  const startedAt = Date.now();
+  function step() {
+    const end = Math.min(idx + SESSION_HEADER_WARM_BATCH, queue.length);
+    for (; idx < end; idx++) {
+      try {
+        readSessionHeader(queue[idx]);
+      } catch {
+        // ignore
+      }
+    }
+    if (idx < queue.length) {
+      setImmediate(step);
+      return;
+    }
+    console.log(`[WARM] session header cache ready: ${queue.length} transcripts in ${Date.now() - startedAt}ms`);
+  }
+  setImmediate(step);
 }
 
 /**
@@ -7569,6 +7673,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
       console.log('[BIND] WARN: 仅回环监听，非本机来源不可达；公网 Ingress 回源将 502。生产/公网入口须 HOST=0.0.0.0 启动。');
     } else {
       console.log(`[BIND] 对外监听 ${HOST}:${PORT}，可用 curl --noproxy http://${HOST}:${PORT}/healthz 确认回源可达。`);
+    }
+    // 首屏性能：分批预热转录头缓存，避免冷启动首个 /api/bootstrap 触发全树同步解压
+    try {
+      warmSessionHeaderCacheAsync();
+    } catch (err) {
+      console.error(`[WARM] failed to start (non-fatal): ${err && err.message}`);
     }
   });
 }

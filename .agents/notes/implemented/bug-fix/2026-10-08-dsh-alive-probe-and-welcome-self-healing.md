@@ -1,5 +1,7 @@
 # ADR: 修复 DSH 进程运行中但初始化页面偶发误报及无法自愈问题
 
+Status: implemented
+
 ## 状态
 implemented
 
