@@ -1226,7 +1226,7 @@
       display: block;
       padding: 6px 48px 6px 36px;
       margin: 4px 0;
-      min-height: 38px;
+      min-height: 28px;
       background: #202020;
       border: none;
       border-radius: 4px;
@@ -2695,6 +2695,15 @@
       try { t = file.type || ''; } catch (e) {}
       return (t === 'image/png' || t === 'image/jpeg' || t === 'image/webp' || t === 'image/gif');
     }
+    function plusIsAudioFile(file) {
+      var t = '';
+      var n = '';
+      try { t = (file.type || '').toLowerCase(); } catch (eT) {}
+      try { n = (file.name || '').toLowerCase(); } catch (eN) {}
+      if (t.indexOf('audio/') === 0) return true;
+      var ext = n.substring(n.lastIndexOf('.'));
+      return (ext === '.mp3' || ext === '.wav' || ext === '.m4a' || ext === '.ogg' || ext === '.flac' || ext === '.aac' || ext === '.opus' || ext === '.wma' || ext === '.amr');
+    }
     function plusStartImageInline(file, fname, fsize) {
       // 无 FileReader（极老内核）则降级：有 sid 走收据通道，无 sid 诚实拦截
       if (typeof FileReader === 'undefined') {
@@ -2775,7 +2784,8 @@
       // 用户观感 = 与首问同时发出。
       if (!sid) {
         plusPendingFile = file;
-        plusFile = { name: fname, size: fsize, receiptId: '', state: 'pending', err: '', kind: 'file' };
+        var pendingKind = plusIsAudioFile(file) ? 'audio' : 'file';
+        plusFile = { name: fname, size: fsize, receiptId: '', state: 'pending', err: '', kind: pendingKind };
         plusRenderCard();
         setStatus('文件已选，输入首句话一起发出');
         openComposer();
@@ -2786,7 +2796,8 @@
     }
     // 已有 sid 的通用文件直传（plusStartUpload 的后半段，供首条 pending 复用）。
     function plusUploadFileToSession(file, sid, fname, fsize) {
-      plusFile = { name: fname, size: fsize, receiptId: '', state: 'uploading', err: '', pct: 0 };
+      var uploadKind = plusIsAudioFile(file) ? 'audio' : 'file';
+      plusFile = { name: fname, size: fsize, receiptId: '', state: 'uploading', err: '', pct: 0, kind: uploadKind };
       plusRenderCard();
       var xhr = new XMLHttpRequest();
       plusUploadXhr = xhr;
@@ -9505,13 +9516,21 @@
           else if (ext === 'txt' || ext === 'log' || ext === 'csv') iconHtml = '📝';
         }
 
-        var descText = item.description || item.path;
+        var descText = item.description || '';
+        // 弱化信息与重复信息消除：若文案为空、与文件名重复或为常规编辑套话，不显示第二行
+        var showDesc = false;
+        if (descText && descText !== itemName && descText !== item.path && descText !== '编辑修改' && descText !== '写入文件') {
+          showDesc = true;
+        }
+
+        var bodyHtml = '<div class="deliverable-body">' +
+            '<div class="deliverable-name">' + escapeHtml(itemName) + '</div>' +
+            (showDesc ? ('<div class="deliverable-desc">' + escapeHtml(descText) + '</div>') : '') +
+          '</div>';
+
         card.innerHTML =
           '<div class="deliverable-icon">' + iconHtml + '</div>' +
-          '<div class="deliverable-body">' +
-            '<div class="deliverable-name">' + escapeHtml(itemName) + '</div>' +
-            '<div class="deliverable-desc">' + escapeHtml(descText) + '</div>' +
-          '</div>' +
+          bodyHtml +
           (canPreview ? '<div class="deliverable-action">预览</div>' : '');
 
         dList.appendChild(card);
@@ -11026,6 +11045,9 @@
 
       function updateAttachDeliverables() {
         if (!attachDeliverables || !attachDeliverables.length) return;
+        // 仅在会话结束终态时呈现，进行过程中不向 DOM 挂载实时卡片
+        var effA = resolveEffectiveSessionState();
+        if (effA && effA.isRunning) return;
         if (attachDeliverablesWrap && attachDeliverablesWrap.parentNode) {
           attachDeliverablesWrap.parentNode.removeChild(attachDeliverablesWrap);
         }
@@ -11420,6 +11442,8 @@
                     hideQuestionPanel();
                     clearQueueDock(sid);
                     stopAttach();
+                    // 终态时挂载交付文件列表（若未被 loadHistory 整体重刷）
+                    updateAttachDeliverables();
                     if (attachHasRunning && !userScrolledUp && currentSessionId === sid) {
                       loadHistory(wsSelect.value, sid, null, true);
                     } else if (attachHasRunning) {
@@ -11995,6 +12019,9 @@
 
       function updateLiveDeliverables() {
         if (!liveDeliverables || !liveDeliverables.length) return;
+        // 仅在会话结束终态时呈现，进行过程中不向 DOM 挂载实时卡片
+        var effL = resolveEffectiveSessionState();
+        if (effL && effL.isRunning) return;
         if (liveDeliverablesWrap && liveDeliverablesWrap.parentNode) {
           liveDeliverablesWrap.parentNode.removeChild(liveDeliverablesWrap);
         }
@@ -12108,6 +12135,9 @@
         if (plusFile.state === 'ready' && plusFile.receiptId) {
           plusAttachRid = plusFile.receiptId;
           payload.receiptIds = [plusFile.receiptId];
+          if (plusFile.kind === 'audio') {
+            payload.prompt = payload.prompt + '\n\n[系统提示：用户随本消息上传了音频/语音文件，请首先调用 voice-transcribe skill 将该语音文件转录为文本，再根据转录内容进行回复。]';
+          }
         }
         if (plusFile.state === 'ready' && plusFile.kind === 'image' && plusFile.data) {
           payload.image = { mediaType: plusFile.mediaType, data: plusFile.data, name: plusFile.name };
@@ -12352,6 +12382,8 @@
                       liveActBar.appendChild(createForkAction({ role: 'assistant', seq: -1, text: fullAssistantText }));
                       ensureLiveBubble().appendChild(liveActBar);
                     }
+                    // 终态时挂载交付文件列表
+                    updateLiveDeliverables();
                     // 轮次结束：本轮思考+工具收进单行折叠（对齐 dsh turnClosed 折叠）
                     finalizeLiveProcess(assistantWrap);
                     clearQueueDock(sendSid || currentSessionId); // 终态收口：排队/插队槽失效或被下一轮接管
@@ -12607,6 +12639,9 @@
         }
         if (plusFile.state === 'ready' && plusFile.receiptId) {
           plusRunRid = plusFile.receiptId;
+          if (plusFile.kind === 'audio') {
+            prompt = prompt + '\n\n[系统提示：用户随本消息上传了音频/语音文件，请首先调用 voice-transcribe skill 将该语音文件转录为文本，再根据转录内容进行回复。]';
+          }
         }
         if (plusFile.state === 'ready' && plusFile.kind === 'image' && plusFile.data) {
           plusRunImage = { mediaType: plusFile.mediaType, data: plusFile.data, name: plusFile.name };

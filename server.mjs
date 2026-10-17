@@ -4485,7 +4485,7 @@ function getSessionHistory(targetCwd, sessionId) {
               map.set(filePath, {
                 path: filePath,
                 name: base,
-                description: name === 'write' ? '写入文件' : '编辑修改',
+                description: '',
                 kind: kind,
               });
             }

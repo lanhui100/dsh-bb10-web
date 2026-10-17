@@ -1,3 +1,8 @@
+---
+name: voice-transcribe
+description: 语音转文本转换器。用于将语音消息/音频文件（.wav, .mp3, .m4a, .ogg, .flac, .aac, .opus）转录为纯文本，调用 gemini-3.8-flash 模型的多模态音频理解能力完成高精度转换。触发场景包括用户上传语音/音频文件、要求“转录语音”、“把语音转成文字”、“识别录音内容”等。
+---
+
 # Voice Transcribe (语音转文本转换器)
 
 本 Skill 用于将语音消息/音频文件（如 `.wav`, `.mp3`, `.m4a`, `.ogg`, `.flac`, `.aac` 等）转录为纯文本文本，调用上游 `gemini-3.8-flash` 模型的原生多模态音频理解能力完成高精度转换。
