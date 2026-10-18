@@ -59,3 +59,56 @@
 合计: 12 用例, PASS 8, FAIL 4, SKIP(degraded) 0
 SUITE-REASONING SUMMARY: total=12 pass=8 fail=4 degraded=0
 EXIT=1
+## 修正后重跑（TEST-DEFECT 修正：A11 marker 扫描限定「● 且 High」）
+# 重跑时间: 2026-10-18T13:11:23+08:00
+# 命令: cd <repo> && node tests/acceptance/suite-reasoning.mjs
+# 说明: 本次重跑时工作区已含 Executor 的 v1.1 修复（server.mjs +184 行 / static/index.html +285 行，含
+#       CATALOG_FAIL_AFTER 接缝、stats 整体替换、applyEffortChoice 脏标记、kimi reasoning），故结果为 12/12 PASS；
+#       未修复实现上的 A11 红相凭证为上文 12:56 段落（主断言 badge 失败，marker 扫描未被触达，故 TEST-DEFECT 修正不改变该红相结论）。
+---
+(node:3742376) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+# Q20 验收套件 REASONING (A1–A8) — 契约 .dev-team/contract-wave-2026-10-18.md
+# 时间: 2026-10-18T05:11:23.738Z
+▶ [REASONING] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空
+  ✔ PASS [336.3ms] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空 — efforts=off/low/high defaultEffort=high current.reasoningEffort=high
+▶ [REASONING] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1
+  ✔ PASS [322.81ms] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1 — plain×2 receipts=1 → refresh=1 后=2
+▶ [REASONING] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort
+  ✔ PASS [337.94ms] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort — low.args.reasoningEffort=low provider=ponyllm model=glm-5.3-flash；无键回合 args 无该字段
+▶ [REASONING] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流
+  ✔ PASS [328.76ms] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流 — 123→400 文案含 reasoningEffort；65 字符→400；空串→200/done
+▶ [REASONING] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → ""
+  ✔ PASS [339.51ms] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → "" — 带 effort stats.reasoningEffort=low；无 effort stats.reasoningEffort=""
+▶ [REASONING] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5}
+  ✔ PASS [104.49ms] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5} — ES5 PASS (1 个内联 script, acorn 7.4.1)
+▶ [REASONING] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图
+  (chromium: playwright default)
+  ✔ PASS [1246.82ms] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图 — 档位含 Low/High 且 ● 命中 High；徽标含 "· Low"；consoleErrors=0；截图=a7-effort-panel.png,a7-effort-badge.png
+▶ [REASONING] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort
+  ✔ PASS [87.95ms] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort — openModel→bootstrap?refresh=1 命中；/api/chat/stream 发送函数（28286B）含 reasoningEffort
+▶ [REASONING] A9 真实浏览器：延迟 /api/session/stats 回包不得回滚用户档位 —— 转录 effort=low 时选 High，在途 stats 到达后徽标仍 "· High" 且发送载荷 reasoningEffort=high
+  ✔ PASS [5016.13ms] A9 真实浏览器：延迟 /api/session/stats 回包不得回滚用户档位 —— 转录 effort=low 时选 High，在途 stats 到达后徽标仍 "· High" 且发送载荷 reasoningEffort=high — 种子 stats=low；选 High 后徽标="glm-5.3-flash · High"；回包后观察终值="glm-5.3-flash · High"；面板 ● High 命中；发送载荷 reasoningEffort=high
+▶ [REASONING] A10 服务端 stats 不继承旧回合：turn1 带 effort=low、turn2 不带 → /api/session/stats.reasoningEffort 必须 ""
+  ✔ PASS [340.45ms] A10 服务端 stats 不继承旧回合：turn1 带 effort=low、turn2 不带 → /api/session/stats.reasoningEffort 必须 "" — turn1 stats=low → turn2（无键）stats=""
+▶ [REASONING] A11 真实浏览器：glm-5.3-flash 选 Low 后切 kimi-k3 → 生效档位取新模型 defaultEffort=high（面板 ● High）
+  ✔ PASS [939.22ms] A11 真实浏览器：glm-5.3-flash 选 Low 后切 kimi-k3 → 生效档位取新模型 defaultEffort=high（面板 ● High） — glm 选 Low 后徽标="glm-5.3-flash · Low"；切 kimi 后徽标="kimi-k3 · High"；面板档位 ● High 命中；kimi reasoning={"efforts":[{"id":"low","name":"Low"},{"id":"high","name":"High"}],"defaultEffort":"high"}
+▶ [REASONING] A12 目录刷新容错：Q20_MOCK_HOST_CATALOG_FAIL=1 接缝生效；FAIL_AFTER=1 时 ?refresh=1 仍返回上一份含 reasoning 的目录（不塌缩磁盘镜像）
+  ✔ PASS [642.71ms] A12 目录刷新容错：Q20_MOCK_HOST_CATALOG_FAIL=1 接缝生效；FAIL_AFTER=1 时 ?refresh=1 仍返回上一份含 reasoning 的目录（不塌缩磁盘镜像） — FAIL=1 接缝生效；FAIL_AFTER=1：暖缓存 3 档 → ?refresh=1 仍 3 档 + current.reasoningEffort=high
+
+──────── REASONING 报告 ────────
+✔ PASS [336.3ms] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空
+✔ PASS [322.81ms] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1
+✔ PASS [337.94ms] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort
+✔ PASS [328.76ms] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流
+✔ PASS [339.51ms] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → ""
+✔ PASS [104.49ms] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5}
+✔ PASS [1246.82ms] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图
+✔ PASS [87.95ms] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort
+✔ PASS [5016.13ms] A9 真实浏览器：延迟 /api/session/stats 回包不得回滚用户档位 —— 转录 effort=low 时选 High，在途 stats 到达后徽标仍 "· High" 且发送载荷 reasoningEffort=high
+✔ PASS [340.45ms] A10 服务端 stats 不继承旧回合：turn1 带 effort=low、turn2 不带 → /api/session/stats.reasoningEffort 必须 ""
+✔ PASS [939.22ms] A11 真实浏览器：glm-5.3-flash 选 Low 后切 kimi-k3 → 生效档位取新模型 defaultEffort=high（面板 ● High）
+✔ PASS [642.71ms] A12 目录刷新容错：Q20_MOCK_HOST_CATALOG_FAIL=1 接缝生效；FAIL_AFTER=1 时 ?refresh=1 仍返回上一份含 reasoning 的目录（不塌缩磁盘镜像）
+合计: 12 用例, PASS 12, FAIL 0, SKIP(degraded) 0
+SUITE-REASONING SUMMARY: total=12 pass=12 fail=0 degraded=0
+EXIT=0

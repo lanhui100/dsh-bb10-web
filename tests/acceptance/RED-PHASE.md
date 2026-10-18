@@ -292,11 +292,31 @@ node tests/acceptance/run-all.mjs           # exit 1（suites=4 failed=1 skipped
 - 隔离与零污染：A9/A11 每例独立 mock 实例（临时 `DSH_HOME` + 临时工作区根），`cleanupTempDirs()` 回收；A12 使用 `startMockServer` 直连以注入新接缝（`launchMock` 未暴露该 env，harness.mjs 冻结不改）。
 - 输出脱敏：`grep -cE '/hom[e]/[a-zA-Z0-9_.-]+/' tests/acceptance/artifacts/red-reasoning2.log` → `0`。
 
+### 7.7.1 TEST-DEFECT 修正（A11 marker 扫描）— Lead 裁定 2026-10-18T13:12+08:00
+
+- **缺陷（测试自身，非实现缺陷）**：A11 原实现取「`#model-tree` 中第一个含 `●` 的 `.tree-item`」文本再断言含 `High`。
+  但既有 UI 的**选中模型行本身即以 `● ` 前缀渲染**（`applyModelChoice` 渲染口径），且契约 §1.6 规定思考强度分组追加在
+  模型分组**之后**，故该扫描必然命中模型行 → 对任何合规实现都不可满足；与 A7(`:630-638`) / A9(`:820-828`) 的「`●` 且 `High`」合取扫描不一致。
+- **修正（最小闭包）**：A11 marker 扫描限定为「同时含 `●` 与 `High` 的行」，与 A7/A9 同口径；**未改动其他任何断言**，
+  主断言（切 kimi-k3 后徽标必须含 `· High`）保持原样。
+- **红相凭证继续有效**：修正前红相（本文件表格 + `red-reasoning2.log` 12:56 段落）中 A11 的失败点是**主断言**
+  （切换后徽标 `"kimi-k3"` 无档位后缀，`kimi reasoning=null`），执行流根本未到达 marker 扫描 —— 该 TEST-DEFECT 不参与红相判定，也不改变其结论。
+- **修正后重跑（追加于 `red-reasoning2.log` 末尾）**：重跑时工作区已含 Executor 的 v1.1 修复
+  （`server.mjs` +184 行 / `static/index.html` +285 行：`Q20_MOCK_HOST_CATALOG_FAIL_AFTER` 接缝、stats 最新 request/header 整体替换、
+  `applyEffortChoice` 脏标记与版本推进、kimi-k3 reasoning），结果为 **`total=12 pass=12 fail=0 degraded=0`，`EXIT=0`**：
+  - A9 绿相实证：`选 High 后徽标="glm-5.3-flash · High"；回包后观察终值="glm-5.3-flash · High"；面板 ● High 命中；发送载荷 reasoningEffort=high`
+  - A11 绿相实证：`glm 选 Low 后徽标="glm-5.3-flash · Low"；切 kimi 后徽标="kimi-k3 · High"；面板档位 ● High 命中；kimi reasoning={"efforts":[low,high],"defaultEffort":"high"}`
+  - A10 / A12 同时转绿（最新 request/header 整体替换；`FAIL=1` 与 `FAIL_AFTER=1` 接缝生效且暖缓存目录未塌缩为磁盘镜像）
+- **「修正后红相」为何不可复现**：红相要求的是**未修复实现**，而当前工作区已是 v1.1 修复版；回滚业务代码越出 test-agent 写域
+  （`server.mjs` / `static/index.html` 属 executor 写域，只读）。故以「修正前红相（12:56）+ 修正后绿相（13:12）」双凭证代替，
+  未放宽任何断言、未使用 skip，符合防假红/防假绿要求。
+- 证据文件：`tests/acceptance/artifacts/red-reasoning2.log` 末尾「修正后重跑」段落（含命令、`SUITE-REASONING SUMMARY` 与 `EXIT=0`）。
+
 ### 冻结清单更新（sha256）
 
 | 文件 | sha256 |
 |:--|:--|
-| `tests/acceptance/suite-reasoning.mjs`（v1.1 追加 A9–A12） | `fff7248c3b4bbe4921fed5fa493cdfbc42ad9e6b4c86a443b805cab2cb3b109e` |
+| `tests/acceptance/suite-reasoning.mjs`（v1.1 追加 A9–A12 + TEST-DEFECT 修正） | `e395b15c502b5bcbaf68daff0eaae8338cd66c9c96e3207e02d2a5875ce9c57f` |
 | `tests/acceptance/run-all.mjs`（未再改动） | `1ad71b64b8bd12ebf828a4308004ed5c58d1b755a02df897793fc3064cb2078f` |
 | `tests/acceptance/lib/harness.mjs`（未改动） | `b9d00ab7765918a65a9ef95015fc9495680572eb508768389636ec7519bf6e64` |
 

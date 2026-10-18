@@ -964,18 +964,22 @@ async function main() {
         fail('A11 kimi-k3 面板必须渲染「思考强度」分组（§5.4 目录 reasoning 缺失）',
           '#model-tree 文本含「思考强度」', '#model-tree 文本=' + JSON.stringify(await treeText(page, '#model-tree')));
       }
-      const markerText = await page.evaluate(() => {
+      // 扫描限定为「同时含 ● 与 High」的档位行：选中模型行同样以 '● ' 前缀渲染（既有 UI），
+      // 故不能用「首个含 ● 的 .tree-item」——那必然命中模型行，对任何合规实现都不可满足
+      // （与 A7/A9 的「● 且 High」合取扫描同口径）。
+      const hasEffortMarker = await page.evaluate(() => {
         const rows = document.querySelectorAll('#model-tree .tree-item');
         for (let i = 0; i < rows.length; i++) {
           const t = rows[i].textContent || '';
-          if (t.indexOf('●') >= 0) return t;
+          if (t.indexOf('●') >= 0 && t.indexOf('High') >= 0) return true;
         }
-        return '';
+        return false;
       });
-      assertOk(markerText.indexOf('High') >= 0, 'A11 面板当前生效项 ● 必须落在 High（kimi defaultEffort）',
-        '● 行文本含 High', '● 行文本=' + JSON.stringify(markerText));
+      assertOk(hasEffortMarker, 'A11 面板当前生效档位 ● 必须落在 High（kimi defaultEffort；扫描限定「● 且 High」，避免命中同样带 ● 的选中模型行）',
+        '含 ● 与 High 的 .tree-item',
+        '#model-tree 文本=' + JSON.stringify(await treeText(page, '#model-tree')));
       return 'glm 选 Low 后徽标=' + JSON.stringify(badgeLow) + '；切 kimi 后徽标=' + JSON.stringify(badgeKimi)
-        + '；● 行=' + JSON.stringify(markerText) + '；kimi reasoning=' + JSON.stringify(kimiReason);
+        + '；面板档位 ● High 命中；kimi reasoning=' + JSON.stringify(kimiReason);
     } finally {
       if (context) { try { await context.close(); } catch { /* 已关闭 */ } }
       await srv.stop();
