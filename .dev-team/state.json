@@ -125,8 +125,8 @@
    "baseline_commit": "b233f8a",
    "red_commit": "36c073b",
    "contract": ".dev-team/contract-wave-2026-10-18.md",
-   "green_commit": null,
-   "status": "in_progress",
+   "green_commit": "e96613a",
+   "status": "completed",
    "quarantine": null,
    "nfr_degraded": [],
    "write_scopes": {
@@ -175,15 +175,38 @@
    "gates": {
     "node_check": "exit 0",
     "es5": "PASS (acorn 7.4.1, 1 inline script)",
-    "acceptance_reasoning": "suite-reasoning A1-A8 pass=8 fail=0 exit=0",
+    "acceptance_reasoning": "A1-A12 pass=12 fail=0 degraded=0 exit=0",
     "acceptance_run_all": "suites=4 failed=0 skipped=0 exit=0",
     "test_unit": "35/35 exit 0",
-    "test_decoupling": "exit 0",
+    "test_decoupling": "PASS exit 0",
     "test_suite": "7/7 exit 0",
-    "live_host_verify": "临时实例 3098 -> 宿主 3080：26 models / 4 with reasoning；真实 chromium 720x720 面板 4 档 + Low 徽标 ' · Low' + ConsoleError=0；截图 docs/release/2026-10-18-live-effort-panel.png"
+    "browser_e2e": "A7/A9/A11 real chromium 720x720 ConsoleError=0 + screenshots",
+    "live_host_verify": "临时实例 3098 + 生产 3090 (restarted)：26 models / 4 with reasoning；openModel 实测发出 /api/bootstrap?refresh=1；面板 4 档 + 选 Low 徽标 ' · Low'；ConsoleError=0；docs/release/2026-10-18-live-effort-panel.png"
    },
    "red2_commit": "b37376a",
-   "red2_tag": "wave-3-reasoning-red2"
+   "red2_tag": "wave-3-reasoning-red2",
+   "green_tag": "wave-3-reasoning",
+   "review_loop": {
+    "l3a": {
+     "verdict": "FAIL",
+     "findings": 2,
+     "fixed": true
+    },
+    "l3b": {
+     "verdict": "FAIL",
+     "findings": 1,
+     "fixed": true
+    },
+    "extra_inline_findings": 7,
+    "red2_commit": "b37376a",
+    "test_defect_fix_commit": "e8db4f2",
+    "post_fix_rerun": "A9-A12 12/12 pass"
+   },
+   "production": {
+    "service": "dsh-q20-web.service",
+    "restarted": "2026-10-18T13:2x+08:00",
+    "verified": "/healthz ok, catalog 26/4 reasoning, browser E2E badge ' · Low'"
+   }
   }
  ]
 }
