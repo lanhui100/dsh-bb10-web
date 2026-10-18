@@ -29,7 +29,7 @@ import {
   ARTIFACT_DIR, REPO_ROOT,
   assertEqual, assertNonEmptyArray, assertOk,
   cleanupTempDirs, countRpc, createRunner, createWorkspace, fail, fmtMs,
-  launchMock, readRpcLog, redact, request, requireSeam, seedSession, skip, sse, tempDir,
+  launchMock, readRpcLog, redact, request, requireSeam, seedSession, skip, sse, startMockServer, tempDir, waitFor,
 } from './lib/harness.mjs';
 
 const require = createRequire(import.meta.url);
@@ -187,6 +187,109 @@ function treeText(page, selector) {
     if (!el) return '(元素不存在: ' + sel + ')';
     return (el.innerText || el.textContent || '').slice(0, 500);
   }, selector);
+}
+
+/** 允许任意 Q20_MOCK_* 注入的 mock 实例（launchMock 只暴露既有接缝子集，harness.mjs 冻结不可改）。 */
+async function launchMockEnv(extraEnv, prefix) {
+  const wsRoot = tempDir(prefix || 'q20-acc-mock-');
+  const srv = await startMockServer({ workspaceRoot: wsRoot, env: extraEnv || {} });
+  srv.workspaceRoot = wsRoot;
+  const originalStop = srv.stop;
+  srv.stop = async () => {
+    await originalStop();
+    try { fs.rmSync(wsRoot, { recursive: true, force: true }); } catch { /* 清理尽力而为 */ }
+  };
+  return srv;
+}
+
+function badgeText(page) {
+  return page.evaluate(() => {
+    const el = document.getElementById('model-badge-text');
+    return el ? (el.textContent || '') : '';
+  });
+}
+
+/** 显式条件轮询徽标文案（禁止盲 sleep 判定）。 */
+async function waitBadge(page, check, what) {
+  const deadline = Date.now() + 15000;
+  let last = '';
+  while (Date.now() < deadline) {
+    last = await badgeText(page);
+    if (check(last)) return last;
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  fail(what, '徽标条件成立', '15s 内未成立；末次徽标=' + JSON.stringify(last));
+}
+
+/** 观察窗口内徽标的「终值」（捕捉回包迟到后的回滚；窗口内每 100ms 采样一次）。 */
+async function observeBadge(page, windowMs) {
+  const deadline = Date.now() + windowMs;
+  let last = '';
+  while (Date.now() < deadline) {
+    last = await badgeText(page);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return last;
+}
+
+/** 通过真实 UI 选中目标会话（W 面板 → 工作区行 → 会话行），确保 currentSessionId 就位。 */
+async function selectSessionViaUi(page, sid) {
+  try {
+    await page.keyboard.press('w');
+    await page.waitForSelector('#ws-tree .tree-ws', { timeout: 15000 });
+    await page.click('#ws-tree .tree-ws');
+    await page.waitForSelector('#sess-tree .tree-sess', { timeout: 20000 });
+    await page.click('#sess-tree .tree-sess');
+    await page.waitForFunction((s) => typeof getSid === 'function' && getSid() === s, sid, { timeout: 15000 });
+  } catch {
+    fail('前置：通过真实 UI 选中会话失败（' + sid + '）', 'getSid() === ' + sid,
+      await page.evaluate(() => {
+        try { return 'getSid()=' + getSid() + '; cwd=' + getCwd(); } catch (e) { return 'getSid 不可用: ' + e.message; }
+      }));
+  }
+}
+/** 打开唯一模型面板（M 键/徽标同源）：对话框未展开时先展开（徽标仅 compose 态可见），再点徽标。 */
+async function openModelPanel(page) {
+  let visible = false;
+  try {
+    visible = await page.evaluate(() => {
+      const el = document.getElementById('model-badge');
+      return !!el && el.style.display !== 'none';
+    });
+  } catch { /* 页面尚未就绪，走展开路径 */ }
+  if (!visible) await page.keyboard.press('i');
+  try {
+    await page.waitForSelector('#model-badge', { state: 'visible', timeout: 15000 });
+  } catch {
+    fail('前置：#model-badge 必须可见（对话框已展开）', 'display=inline-block',
+      await page.evaluate(() => {
+        const el = document.getElementById('model-badge');
+        return 'display=' + (el ? el.style.display : 'no-element');
+      }));
+  }
+  await page.click('#model-badge');
+  try {
+    await page.waitForFunction(() => {
+      const el = document.getElementById('model-overlay');
+      return !!el && el.style.display === 'block';
+    }, null, { timeout: 15000 });
+  } catch {
+    fail('前置：模型面板必须打开（#model-overlay display=block）', 'display=block',
+      await page.evaluate(() => {
+        const el = document.getElementById('model-overlay');
+        return 'display=' + (el ? el.style.display : 'no-element');
+      }));
+  }
+}
+
+/** 点选思考强度档位（面板须已打开）。 */
+async function clickEffort(page, label, ctx) {
+  const loc = page.locator('#model-tree .tree-item', { hasText: label }).first();
+  const n = await loc.count();
+  assertOk(n > 0, '思考强度档位「' + label + '」必须可点选（' + (ctx || '') + '）',
+    '≥1 个 .tree-item 文本含 ' + label,
+    'count=' + n + '; #model-tree 文本=' + JSON.stringify(await treeText(page, '#model-tree')));
+  await loc.click({ timeout: 10000 });
 }
 
 /** 打开页面并等待 bootstrap 完成（#ws-select 有工作区选项）。 */
@@ -615,6 +718,312 @@ async function main() {
       'openModel 目录刷新=' + refreshOk + '；发送函数 reasoningEffort=' + sendOk
         + '（openModel 片段: ' + briefStr(openModelText, 200) + '）');
     return 'openModel→bootstrap?refresh=1 命中；/api/chat/stream 发送函数（' + streamFn.span + 'B）含 reasoningEffort';
+  });
+
+  // ── A9: 真实浏览器 + 延迟 stats 回包 → 不得回滚用户刚选的档位（契约 v1.1 §5.3.3）──
+  await runner.run('A9 真实浏览器：延迟 /api/session/stats 回包不得回滚用户档位 —— 转录 effort=low 时选 High，在途 stats 到达后徽标仍 "· High" 且发送载荷 reasoningEffort=high', async () => {
+    const browser = await getBrowser();
+    const sid = 'session-acc-a9-race';
+    const srv = await launchMock({ workspaceRoot: tempDir('q20-acc-a9-') });
+    let context = null;
+    try {
+      const cwd = await createWorkspace(srv.base, 'ws-a9-race');
+      // 前置：转录末次 request/header effort=low（在途 stats 回包将携带该值）
+      const seed = await sse(srv.base, '/api/chat/stream', {
+        cwd, provider: MOCK_PROVIDER, model: MOCK_MODEL, sessionId: sid,
+        prompt: 'acceptance-a9-race', reasoningEffort: 'low',
+      }, { timeoutMs: 20000 });
+      assertEqual(seed.status, 200, 'A9 seed 回合 /api/chat/stream 状态码');
+      assertOk(seed.events.some((e) => e.event === 'done'), 'A9 seed 回合必须到达 done 终态',
+        'event: done', seed.events.map((e) => e.event).join(','));
+      const seedStats = await request(srv.base, '/api/session/stats?cwd=' + enc(cwd) + '&id=' + enc(sid), { timeoutMs: 20000 });
+      assertEqual(seedStats.status, 200, 'A9 seed 会话 /api/session/stats 状态码');
+      assertEqual(seedStats.body && seedStats.body.reasoningEffort, 'low',
+        'A9 前置：转录末次 effort 必须为 low（延迟回包携带该值）');
+
+      const app = await openApp(browser, srv, cwd, sid);
+      context = app.context;
+      const page = app.page;
+
+      // 路由闸门：delayMs>0 时扣住 stats 回包，模拟 Q20 上整份转录解压导致的慢回包
+      let delayMs = 0;
+      let statsIssued = 0;
+      let statsInFlight = 0;
+      const statsDone = new Set();
+      await page.route('**/api/session/stats*', async (route) => {
+        const id = ++statsIssued;
+        statsInFlight += 1;
+        const hold = delayMs;
+        if (hold > 0) await new Promise((r) => setTimeout(r, hold));
+        try { await route.continue(); } catch (e) { /* 页面已关闭 */ }
+        statsInFlight -= 1;
+        statsDone.add(id);
+      });
+
+      // 1) 真实 UI 选中会话：currentSessionId 就位后 openModel() 才会触发 loadSessionStats
+      await selectSessionViaUi(page, sid);
+
+      // 2) 展开对话框，等首屏 stats 落地（转录 low 校真生效）
+      await page.keyboard.press('i');
+      await page.waitForSelector('#model-badge', { state: 'visible', timeout: 15000 });
+      await waitFor(() => statsIssued > 0,
+        { timeoutMs: 8000, intervalMs: 80, label: 'A9 会话 stats 请求发出' });
+      await waitFor(() => statsInFlight === 0,
+        { timeoutMs: 12000, intervalMs: 80, label: 'A9 首屏 stats 回包落地' });
+      const badgeLow = await waitBadge(page, (t) => t.indexOf('·') >= 0 && t.indexOf('Low') >= 0,
+        'A9 stats 校真后徽标必须为 Low（转录 effort=low）');
+
+      // 3) 打开面板：openModel() 自身触发 loadSessionStats（在途），扣住 2500ms
+      delayMs = 2500;
+      const issuedBefore = statsIssued;
+      await page.click('#model-badge');
+      await waitFor(() => statsIssued > issuedBefore,
+        { timeoutMs: 8000, intervalMs: 50, label: 'A9 面板触发的在途 stats 请求' });
+      const heldId = statsIssued;
+
+      // 4) 在途回包尚未到达时，用户选定 High
+      await clickEffort(page, 'High', 'A9 在途 stats 未返回时选择 High');
+      const badgePicked = await badgeText(page);
+      assertOk(badgePicked.indexOf('·') >= 0 && badgePicked.indexOf('High') >= 0,
+        'A9 选定 High 后徽标必须立即显示 High', '含 "· High"', badgePicked);
+
+      // 5) 等在途 stats 回包落地，观察 1.5s 内徽标是否被回滚
+      await waitFor(() => statsDone.has(heldId),
+        { timeoutMs: 20000, intervalMs: 100, label: 'A9 在途 stats 回包落地' });
+      const observed = await observeBadge(page, 1500);
+      const shotRace = path.join(ARTIFACT_DIR, 'a9-effort-rollback.png');
+      await page.screenshot({ path: shotRace });
+      assertOk(observed.indexOf('·') >= 0 && observed.indexOf('High') >= 0,
+        'A9 在途 stats 回包不得回滚用户刚选的档位（契约 v1.1 §5.3.3：effort 变更须与模型变更同权推进版本/脏标记）',
+        '徽标保持 "· High"',
+        '观察 1.5s 终值=' + JSON.stringify(observed) + '（选择后即时值=' + JSON.stringify(badgePicked)
+          + '；在途回包值=low；校真前徽标=' + JSON.stringify(badgeLow) + '）');
+
+      // 6) 回包后再开面板，等新一轮 stats 落地：当前生效项 ● 必须仍是 High
+      delayMs = 0;
+      const issuedBefore2 = statsIssued;
+      await page.click('#model-badge');
+      await waitFor(() => statsIssued > issuedBefore2,
+        { timeoutMs: 8000, intervalMs: 50, label: 'A9 重开面板 stats 请求' });
+      const reopenId = statsIssued;
+      await waitFor(() => statsDone.has(reopenId),
+        { timeoutMs: 12000, intervalMs: 100, label: 'A9 重开面板 stats 回包落地' });
+      try {
+        await page.waitForFunction(() => {
+          const el = document.getElementById('model-tree');
+          return !!el && (el.textContent || '').indexOf('思考强度') >= 0;
+        }, null, { timeout: 15000 });
+      } catch {
+        fail('A9 面板必须渲染「思考强度」分组', '#model-tree 文本含「思考强度」',
+          '#model-tree 文本=' + JSON.stringify(await treeText(page, '#model-tree')));
+      }
+      const markerOk = await page.evaluate(() => {
+        const rows = document.querySelectorAll('#model-tree .tree-item');
+        for (let i = 0; i < rows.length; i++) {
+          const t = rows[i].textContent || '';
+          if (t.indexOf('High') >= 0 && t.indexOf('●') >= 0) return true;
+        }
+        return false;
+      });
+      assertOk(markerOk, 'A9 回包后重开面板，当前生效档位必须仍为「● High」（不得回落到 ● Low）',
+        '含 ● 与 High 的 .tree-item',
+        '#model-tree 文本=' + JSON.stringify(await treeText(page, '#model-tree')));
+
+      // 7) 下一轮发送载荷必须仍是 high
+      await page.click('#model-close-btn');
+      let sendPayload = null;
+      await page.route('**/api/chat/stream', async (route) => {
+        try { sendPayload = JSON.parse(route.request().postData() || 'null'); } catch (e) { sendPayload = null; }
+        try { await route.continue(); } catch (e2) { /* 页面已关闭 */ }
+      });
+      await page.fill('#input-box', 'a9 effort probe');
+      await page.press('#input-box', 'Enter');
+      await waitFor(() => sendPayload !== null, { timeoutMs: 20000, intervalMs: 100, label: 'A9 发送请求发出' });
+      assertEqual(sendPayload && sendPayload.reasoningEffort, 'high',
+        'A9 下一轮发送载荷 reasoningEffort 必须为 high（不得被在途 stats 回滚为 low）');
+      return '种子 stats=low；选 High 后徽标=' + JSON.stringify(badgePicked) + '；回包后观察终值=' + JSON.stringify(observed)
+        + '；面板 ● High 命中；发送载荷 reasoningEffort=high';
+    } finally {
+      if (context) { try { await context.close(); } catch { /* 已关闭 */ } }
+      await srv.stop();
+    }
+  });
+
+  // ── A10: stats 不继承旧回合（契约 v1.1 §5.1）──────────────────────────────
+  await runner.run('A10 服务端 stats 不继承旧回合：turn1 带 effort=low、turn2 不带 → /api/session/stats.reasoningEffort 必须 ""', async () => {
+    const srv = await launchMock({ workspaceRoot: tempDir('q20-acc-a10-') });
+    try {
+      const cwd = await createWorkspace(srv.base, 'ws-a10');
+      const sid = 'session-acc-a10-turns';
+      const t1 = await sse(srv.base, '/api/chat/stream', {
+        cwd, provider: MOCK_PROVIDER, model: MOCK_MODEL, sessionId: sid,
+        prompt: 'acceptance-a10-turn1-with-effort-low', reasoningEffort: 'low',
+      }, { timeoutMs: 20000 });
+      assertEqual(t1.status, 200, 'A10 turn1 /api/chat/stream 状态码');
+      assertOk(t1.events.some((e) => e.event === 'done'), 'A10 turn1 必须到达 done 终态',
+        'event: done', t1.events.map((e) => e.event).join(','));
+      const st1 = await request(srv.base, '/api/session/stats?cwd=' + enc(cwd) + '&id=' + enc(sid), { timeoutMs: 20000 });
+      assertEqual(st1.status, 200, 'A10 turn1 后 GET /api/session/stats 状态码');
+      assertEqual(st1.body && st1.body.reasoningEffort, 'low',
+        'A10 前置：turn1 带 effort=low，stats 必须为 low');
+
+      // turn2 不带 reasoningEffort：prompt 长度刻意不同，确保转录 size 变化（避开 stats 缓存键）
+      const t2 = await sse(srv.base, '/api/chat/stream', {
+        cwd, provider: MOCK_PROVIDER, model: MOCK_MODEL, sessionId: sid,
+        prompt: 'acceptance-a10-turn2-default-effort-no-key-present',
+      }, { timeoutMs: 20000 });
+      assertEqual(t2.status, 200, 'A10 turn2 /api/chat/stream 状态码');
+      assertOk(t2.events.some((e) => e.event === 'done'), 'A10 turn2 必须到达 done 终态',
+        'event: done', t2.events.map((e) => e.event).join(','));
+      const st2 = await request(srv.base, '/api/session/stats?cwd=' + enc(cwd) + '&id=' + enc(sid), { timeoutMs: 20000 });
+      assertEqual(st2.status, 200, 'A10 turn2 后 GET /api/session/stats 状态码');
+      assertEqual(st2.body && st2.body.reasoningEffort, '',
+        'A10 最新回合未带 effort → stats.reasoningEffort 必须为 ""（契约 v1.1 §5.1：最新 request/header 整体替换，禁止保留最近非空值）');
+      return 'turn1 stats=low → turn2（无键）stats=""';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  // ── A11: 换模型档位语义（契约 v1.1 §5.3.1 + §5.4）────────────────────────
+  await runner.run('A11 真实浏览器：glm-5.3-flash 选 Low 后切 kimi-k3 → 生效档位取新模型 defaultEffort=high（面板 ● High）', async () => {
+    const browser = await getBrowser();
+    const sid = 'session-acc-a11-switch';
+    const srv = await launchMock({ workspaceRoot: tempDir('q20-acc-a11-') });
+    let context = null;
+    try {
+      const cwd = await createWorkspace(srv.base, 'ws-a11');
+      const seed = await sse(srv.base, '/api/chat/stream', {
+        cwd, provider: MOCK_PROVIDER, model: MOCK_MODEL, sessionId: sid,
+        prompt: 'acceptance-a11-switch',
+      }, { timeoutMs: 20000 });
+      assertEqual(seed.status, 200, 'A11 seed 回合 /api/chat/stream 状态码');
+      assertOk(seed.events.some((e) => e.event === 'done'), 'A11 seed 回合必须到达 done 终态',
+        'event: done', seed.events.map((e) => e.event).join(','));
+      const app = await openApp(browser, srv, cwd, sid);
+      context = app.context;
+      const page = app.page;
+
+      // stats 计数：保证每次断言都在「回包落地之后」判定，不吃时序红利
+      let statsIssued = 0;
+      let statsInFlight = 0;
+      const statsDone = new Set();
+      await page.route('**/api/session/stats*', async (route) => {
+        const id = ++statsIssued;
+        statsInFlight += 1;
+        try { await route.continue(); } catch (e) { /* 页面已关闭 */ }
+        statsInFlight -= 1;
+        statsDone.add(id);
+      });
+
+      await selectSessionViaUi(page, sid);
+      await page.keyboard.press('i');
+      await page.waitForSelector('#model-badge', { state: 'visible', timeout: 15000 });
+      await waitFor(() => statsInFlight === 0,
+        { timeoutMs: 12000, intervalMs: 80, label: 'A11 会话首屏 stats 回包落地' });
+
+      const kimiReason = await page.evaluate(() => {
+        try { return modelReasoningMap['ponyllm:::kimi-k3'] || null; } catch (e) { return 'unavailable:' + e.message; }
+      });
+
+      await openModelPanel(page);
+      await clickEffort(page, 'Low', 'A11 先在同 provider 的 glm 上选 Low');
+      const badgeLow = await waitBadge(page, (t) => t.indexOf('·') >= 0 && t.indexOf('Low') >= 0,
+        'A11 glm 选 Low 后徽标');
+
+      // 切到同 provider 的另一个带 reasoning 模型 kimi-k3（§5.3.1：换任何模型一律取新模型 defaultEffort）
+      await openModelPanel(page);
+      const kimiItem = page.locator('#model-tree .tree-item', { hasText: 'Kimi-K3' }).first();
+      const kimiCount = await kimiItem.count();
+      assertOk(kimiCount > 0, 'A11 面板必须含 kimi-k3 模型行（mock 目录 §1.5.1）',
+        '≥1 个 .tree-item 文本含 Kimi-K3',
+        'count=' + kimiCount + '; #model-tree 文本=' + JSON.stringify(await treeText(page, '#model-tree')));
+      await kimiItem.click({ timeout: 10000 });
+      const badgeKimi = await waitBadge(page, (t) => t.toLowerCase().indexOf('kimi') >= 0,
+        'A11 切换到 kimi-k3 后徽标');
+      assertOk(badgeKimi.indexOf('·') >= 0 && badgeKimi.indexOf('High') >= 0,
+        'A11 换模型后生效档位必须取新模型 reasoning.defaultEffort=high（契约 v1.1 §5.3.1；§5.4 要求 kimi-k3 携 reasoning low/high + defaultEffort high），不得沿用上一模型的 Low',
+        '徽标含 "· High"',
+        '实际徽标=' + JSON.stringify(badgeKimi) + '（切换前 glm 徽标=' + JSON.stringify(badgeLow)
+          + '）；kimi 目录 reasoning=' + JSON.stringify(kimiReason));
+
+      // 面板当前生效项 ● 必须落在 High（等重开面板触发的 stats 回包落地后判定）
+      const issuedBefore = statsIssued;
+      await openModelPanel(page);
+      await waitFor(() => statsIssued > issuedBefore,
+        { timeoutMs: 8000, intervalMs: 50, label: 'A11 重开面板 stats 请求' });
+      const reopenId = statsIssued;
+      await waitFor(() => statsDone.has(reopenId),
+        { timeoutMs: 12000, intervalMs: 100, label: 'A11 重开面板 stats 回包落地' });
+      try {
+        await page.waitForFunction(() => {
+          const el = document.getElementById('model-tree');
+          return !!el && (el.textContent || '').indexOf('思考强度') >= 0;
+        }, null, { timeout: 15000 });
+      } catch {
+        fail('A11 kimi-k3 面板必须渲染「思考强度」分组（§5.4 目录 reasoning 缺失）',
+          '#model-tree 文本含「思考强度」', '#model-tree 文本=' + JSON.stringify(await treeText(page, '#model-tree')));
+      }
+      const markerText = await page.evaluate(() => {
+        const rows = document.querySelectorAll('#model-tree .tree-item');
+        for (let i = 0; i < rows.length; i++) {
+          const t = rows[i].textContent || '';
+          if (t.indexOf('●') >= 0) return t;
+        }
+        return '';
+      });
+      assertOk(markerText.indexOf('High') >= 0, 'A11 面板当前生效项 ● 必须落在 High（kimi defaultEffort）',
+        '● 行文本含 High', '● 行文本=' + JSON.stringify(markerText));
+      return 'glm 选 Low 后徽标=' + JSON.stringify(badgeLow) + '；切 kimi 后徽标=' + JSON.stringify(badgeKimi)
+        + '；● 行=' + JSON.stringify(markerText) + '；kimi reasoning=' + JSON.stringify(kimiReason);
+    } finally {
+      if (context) { try { await context.close(); } catch { /* 已关闭 */ } }
+      await srv.stop();
+    }
+  });
+
+  // ── A12: 强制回源失败不得丢弃有效目录缓存（契约 v1.1 §5.2 + §5.4 接缝裁定）──
+  await runner.run('A12 目录刷新容错：Q20_MOCK_HOST_CATALOG_FAIL=1 接缝生效；FAIL_AFTER=1 时 ?refresh=1 仍返回上一份含 reasoning 的目录（不塌缩磁盘镜像）', async () => {
+    // 12.1 接缝活性：catalog 全失败 → 不得再返回宿主目录（reasoning 唯一来源）
+    const failSrv = await launchMockEnv({ Q20_MOCK_HOST_CATALOG_FAIL: '1' }, 'q20-acc-a12a-');
+    try {
+      const r = await request(failSrv.base, '/api/bootstrap', { timeoutMs: 20000 });
+      assertEqual(r.status, 200, 'A12（接缝探针）catalog 全失败时 /api/bootstrap 状态码');
+      const models = Array.isArray(r.body && r.body.models) ? r.body.models : [];
+      const leaked = models.filter((m) => m && m.reasoning);
+      assertOk(leaked.length === 0,
+        'A12 Q20_MOCK_HOST_CATALOG_FAIL=1 接缝必须生效：宿主目录不可用时不得仍返回宿主目录（§1.1 磁盘兜底路径不产出 reasoning）',
+        '无任何模型携带 reasoning（退回磁盘镜像）',
+        '仍有 ' + leaked.length + ' 个模型携带 reasoning: ' + briefStr(leaked.map((m) => m.provider + '/' + m.model)));
+    } finally {
+      await failSrv.stop();
+    }
+
+    // 12.2 主断言：先暖缓存（宿主目录成功）→ 其后 modelCatalog 注入失败 → ?refresh=1 必须返回缓存目录
+    const srv = await launchMockEnv({ Q20_MOCK_HOST_CATALOG_FAIL_AFTER: '1' }, 'q20-acc-a12b-');
+    try {
+      const warm = await request(srv.base, '/api/bootstrap', { timeoutMs: 20000 });
+      assertEqual(warm.status, 200, 'A12 首次 /api/bootstrap 状态码');
+      const glmWarm = findModel(warm.body && warm.body.models, MOCK_PROVIDER, MOCK_MODEL);
+      assertOk(!!glmWarm && glmWarm.reasoning && Array.isArray(glmWarm.reasoning.efforts) && glmWarm.reasoning.efforts.length === 3,
+        'A12 前置：首次 bootstrap 必须取得含 reasoning 的宿主目录（暖缓存）',
+        MOCK_MODEL + ' reasoning.efforts=3', glmWarm);
+
+      const refreshed = await request(srv.base, '/api/bootstrap?refresh=1', { timeoutMs: 20000 });
+      assertEqual(refreshed.status, 200, 'A12 宿主失败时 GET /api/bootstrap?refresh=1 仍应 200');
+      const glmAfter = findModel(refreshed.body && refreshed.body.models, MOCK_PROVIDER, MOCK_MODEL);
+      const effortsAfter = glmAfter && glmAfter.reasoning && Array.isArray(glmAfter.reasoning.efforts)
+        ? glmAfter.reasoning.efforts.length : 0;
+      assertOk(effortsAfter === 3,
+        'A12 ?refresh=1 在宿主目录失败时必须返回上一份有效目录（含 reasoning），不得塌缩为无 reasoning 的磁盘镜像（契约 v1.1 §5.2）',
+        MOCK_MODEL + ' reasoning.efforts=3',
+        '实际 efforts=' + effortsAfter + '；' + MOCK_MODEL + '=' + briefStr(glmAfter));
+      assertEqual(refreshed.body && refreshed.body.current && refreshed.body.current.reasoningEffort, 'high',
+        'A12 强制刷新失败时 current.reasoningEffort 必须仍来自缓存目录');
+      return 'FAIL=1 接缝生效；FAIL_AFTER=1：暖缓存 3 档 → ?refresh=1 仍 3 档 + current.reasoningEffort=high';
+    } finally {
+      await srv.stop();
+    }
   });
 
   if (_browserPromise) {

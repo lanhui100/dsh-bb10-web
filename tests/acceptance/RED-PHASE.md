@@ -261,3 +261,46 @@ node tests/acceptance/run-all.mjs           # exit 1（suites=4 failed=1 skipped
 1. `node tests/acceptance/suite-reasoning.mjs` → **exit 0**：A1–A5、A7、A8 全绿，A6 保持 PASS。
 2. `node tests/acceptance/run-all.mjs` → **exit 0**（4 套件全绿；HOST 若因窗口内无 running 会话 SKIP 则为 exit 3，以 `suite-reasoning.mjs` exit 0 为准）。
 3. A7 绿相要求 `artifacts/a7-effort-panel.png` 中可见「⚙ 思考强度」分组（含 `Off/Low/High`，当前项 `●`）且 `a7-effort-badge.png` 徽标含 `· Low`，Console Error = 0。
+
+## 7.7 红相 #2（契约 v1.1 §5.5 A9–A12）— L3 对抗审查后追加的回归用例
+
+- 落盘时间: **2026-10-18T12:56+08:00**；owner: **test-agent**（L2-T）
+- 契约来源: [contract-wave-2026-10-18.md](.dev-team/contract-wave-2026-10-18.md) §5.1–§5.5（v1.1 修订），审查证据 `.dev-team/review-l3a-wave3.json` / `review-l3b-wave3.json`
+- 物理日志: [red-reasoning2.log](tests/acceptance/artifacts/red-reasoning2.log) · 物理截图: [a9-effort-rollback.png](tests/acceptance/artifacts/a9-effort-rollback.png)（真实 chromium 720×720：用户已选 High，底栏徽标却回落为 `glm-5.3-flash · Low`）
+- 运行: `node tests/acceptance/suite-reasoning.mjs` → **exit 1**（`total=12 pass=8 fail=4 degraded=0`）
+  - A1–A8（v1.0 已转绿）**保持 PASS**，A9–A12 全部真实失败 → 聚合 `run-all.mjs` 随之为 exit 1。
+
+| ID | 断言要点 | 红相结论 | 真实失败摘要（期望 vs 实际） |
+|:--|:--|:--|:--|
+| A9 | 真实浏览器 + 延迟 `/api/session/stats`（playwright route 扣住 2500ms）：转录 effort=low 的会话里用户选 High，在途 stats 到达后徽标/面板 ● 仍 High，发送载荷 `reasoningEffort='high'` | ✖ FAIL（断言失败，非前置失败） | 前置全通过（会话 stats 校真为 low → 开面板触发在途 stats → 选 High 后徽标立即 `"glm-5.3-flash · High"`）；**在途回包落地后观察 1.5s 终值 `"glm-5.3-flash · Low"`**（期望保持 High）。根因：`applyEffortChoice` 未推进 `sessionModelRevision`/`sessionModelDirty`（§5.3.3） |
+| A10 | 同会话 turn1 effort=low、turn2 不带该键 → `/api/session/stats.reasoningEffort === ''` | ✖ FAIL（断言失败） | 前置 turn1 stats=`low` 通过；**turn2 后 stats 仍为 `low`，期望 `''`**。根因：stats 折叠保留「最近一个非空值」，未整体替换最新 `request/header`（§5.1） |
+| A11 | 真实浏览器：glm-5.3-flash 选 Low 后切同 provider 的 kimi-k3 → 生效档位取新模型 `defaultEffort='high'` | ✖ FAIL（断言失败；接缝缺失为同一根因的可读面） | 切换后 **徽标 `"kimi-k3"`（无档位后缀），期望含 `"· High"`**；页面内实测 `modelReasoningMap['ponyllm:::kimi-k3'] = null`（§5.4 mock 目录未给 kimi-k3 加 reasoning）。接缝补齐后仍受 §5.3.1 守卫：当前 `effortOnModelChange` 会保留同 provider 的 Low |
+| A12 | 目录刷新容错：`Q20_MOCK_HOST_CATALOG_FAIL=1` 接缝生效；`FAIL_AFTER=1` 先暖缓存、其后 catalog 失败 → `?refresh=1` 返回上一份含 reasoning 的目录 | ✖ FAIL（接缝缺失，可读断言） | `FAIL=1` 实例仍返回宿主目录：**期望「无模型携带 reasoning（退回磁盘镜像）」；实际 `ponyllm/glm-5.3-flash` 仍带 reasoning**。根因：mock 未实现 catalog 失败接缝（§5.4 由 Lead 裁定为 `CATALOG_FAIL` 全失败 + `CATALOG_FAIL_AFTER=<n>` 成功 n 次后失败） |
+
+### A12 设计说明（接缝语义按 Lead 裁定）
+
+1. **接缝活性是第 1 断言**：`Q20_MOCK_HOST_CATALOG_FAIL=1`（全失败）下不得再返回宿主目录——宿主目录是 `reasoning` 的唯一来源，磁盘兜底路径按 §1.1 不产出该字段，故这是可机器判定的接缝存在性证据。
+2. **主断言是第 2 断言**：`Q20_MOCK_HOST_CATALOG_FAIL_AFTER=1` → 首次 `/api/bootstrap` 暖缓存（断言取下 3 档 efforts）→ 后续 `?refresh=1` 失败时仍返回该缓存（3 档 + `current.reasoningEffort='high'`），不得塌缩为无 reasoning 的磁盘镜像（§5.2）。
+3. 红相下第 1 断言即失败（接缝未实现），故第 2 断言的红相证据在 Executor 补齐接缝后由同一条用例继续判定——即接缝与行为双保险，不放宽、不跳过。
+
+### 红相真实性核查（防假红）
+
+- `node --check` 通过；套件正常输出 `SUITE-REASONING SUMMARY`（非 exit 2）。
+- A9/A11 为真实 chromium（720×720）链路：A9 的失败点是「在途 stats 回包落地后徽标被回滚」的观测断言，前置（会话选中 `getSid()`、stats 校真、面板档位点击、徽标即时 High）全部通过；A11 的失败点是切换模型后的档位断言，前置（glm 选 Low 成功、kimi 模型行点击成功）全部通过。
+- A10/A12 均为服务端 HTTP 断言（stats JSON / bootstrap JSON），无 500、无语法/导入错误。
+- A9 的延迟注入用 playwright route（确定性扣住回包），判定用「回包完成事件 Set + 1.5s 采样观察窗口」，非盲 sleep 判定；A11 的面板断言在「重开面板 stats 回包落地之后」判定，不吃时序红利。
+- 隔离与零污染：A9/A11 每例独立 mock 实例（临时 `DSH_HOME` + 临时工作区根），`cleanupTempDirs()` 回收；A12 使用 `startMockServer` 直连以注入新接缝（`launchMock` 未暴露该 env，harness.mjs 冻结不改）。
+- 输出脱敏：`grep -cE '/hom[e]/[a-zA-Z0-9_.-]+/' tests/acceptance/artifacts/red-reasoning2.log` → `0`。
+
+### 冻结清单更新（sha256）
+
+| 文件 | sha256 |
+|:--|:--|
+| `tests/acceptance/suite-reasoning.mjs`（v1.1 追加 A9–A12） | `fff7248c3b4bbe4921fed5fa493cdfbc42ad9e6b4c86a443b805cab2cb3b109e` |
+| `tests/acceptance/run-all.mjs`（未再改动） | `1ad71b64b8bd12ebf828a4308004ed5c58d1b755a02df897793fc3064cb2078f` |
+| `tests/acceptance/lib/harness.mjs`（未改动） | `b9d00ab7765918a65a9ef95015fc9495680572eb508768389636ec7519bf6e64` |
+
+### 绿相判据（A9–A12 追加）
+
+1. `node tests/acceptance/suite-reasoning.mjs` → **exit 0**（A1–A12 全绿），且 `artifacts/a9-effort-rollback.png` 中徽标保持 `· High`。
+2. A12 绿相要求 mock 同时实现 `Q20_MOCK_HOST_CATALOG_FAIL=1`（全失败）与 `Q20_MOCK_HOST_CATALOG_FAIL_AFTER=<n>`（成功 n 次后失败）。
