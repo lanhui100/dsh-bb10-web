@@ -1,0 +1,11 @@
+{
+  "verdict": "FAIL",
+  "findings": [
+    {
+      "file": "static/index.html",
+      "line": 6471,
+      "rule": "契约 §1.6 stats 校真：『本地有更新选择时不得回滚』。effort-only 选择（applyEffortChoice:6368-6375）只 modelChoiceRevision++，既不推进 sessionModelRevision[sid] 也不置 sessionModelDirty[sid]；而守卫用的是请求发出时捕获的 requestRevision 与 sessionModelRevision[sid] 比较，故在途 stats 回包仍判定『无本地更新』并覆盖用户刚选的档位（与模型路径 6200-6210/6348 既有防回滚机制不一致）。",
+      "counterexample": "真实浏览器（playwright，720x720，Q20_MOCK_HOST）复现，时间戳为实测：①会话转录上一回合 provider=ponyllm model=glm-5.3-flash reasoningEffort=low（/api/session/stats 实测 reasoningEffort=\"low\"）；②selectSession 进入该会话，stats 校真后徽标=\"glm-5.3-flash · Low\"；③openModel() 自身触发 GET /api/session/stats（t=3176 REQ），用 page.route 延迟 3s 返回以模拟 Q20 上整份转录解压（server.mjs:5383-5387 每次 stats 全量解压）导致的慢回包；④用户在 t=3264 点面板『High』→ 徽标=\"glm-5.3-flash · High\"、sessionEffortStore={\"session-l3b-race3\":\"high\"}；⑤被延迟的 stats 回包（requestRevision=1，sessionModelRevision[sid]=1，sessionModelDirty 未置）在 t=7785 命中 6471 守卫 → 实际终态 currentReasoningEffort=\"low\"、sessionEffortStore={\"session-l3b-race3\":\"low\"}、徽标回退为\"glm-5.3-flash · Low\"。即用户显式选择的思考强度被旧快照静默回滚，下一次 /api/chat/stream 会发送 low（模型耗时/成本随之改变），且状态栏无任何提示。修复方向：applyEffortChoice 落地时同步标记该会话（置 sessionModelDirty[sid] 或把 sessionModelRevision[sid] 推进到 modelChoiceRevision），使早于该选择的 stats 回包被 6471 守卫拦截。"
+    }
+  ]
+}

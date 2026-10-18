@@ -14,7 +14,7 @@ A dedicated, lightweight Web client and companion service tailored for the **Bla
    - **Physical Full Keyboard Navigation**:
      - `W`: Toggle fullscreen Workspace modal (inside: `A` adds under home, `D` removes with confirm unregister-only; trailing Ungrouped group; switching auto-opens the Session list)
      - `C`: Enter the all-workspaces "running" session list (every in-progress session; a panel you opened with `C` closes again on `C`, while a panel auto-opened after a workspace switch re-enters the running list on `C` instead of closing; inside: `V` cycles 4 views incl. Ungrouped, `A` archives selected)
-     - `M`: Toggle fullscreen Model modal (grouped by Favorites and Provider; `F` to toggle favorite)
+     - `M`: Toggle fullscreen Model modal (grouped by Favorites and Provider; `F` to toggle favorite). When the selected model advertises reasoning levels, a collapsible `⚙ 思考强度 (N档)` section lists them (Enter applies; the composer `M` badge then shows `model · effort`). Opening the modal also forces one `/api/bootstrap?refresh=1` catalog refresh, so models added or removed in dsh show up without reloading the page.
      - `P`: Toggle fullscreen Permission modal
      - `O`: Toggle fullscreen Session Status modal (Workspace, session, current goal, permission, mode, model, send mode, turns/steps, token speed, and token stats; bottom-right 💬 ring turns red while a goal is active)
      - `Q`: Toggle running-send mode: queue / steer (toast feedback); follow-ups dock at the bottom queue dock before execution, entering the message stream only when actually executed

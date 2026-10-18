@@ -141,6 +141,8 @@ const mockHostState = {
 };
 let mockWsSeq = 0;
 let mockSidSeq = 0;
+// 契约 §5.4：mock session/modelCatalog 调用计数（供 CATALOG_FAIL_AFTER 接缝「成功 n 次后失败」）
+let mockCatalogCalls = 0;
 
 // mock 模式下启动即确保工作区创建根存在（真实 ~/ 天然存在，测试临时根需要预建）。
 if (Q20_MOCK_HOST && Q20_MOCK_HOME) {
@@ -236,12 +238,15 @@ function mockCreateSession(sid, workspaceId) {
 //   Q20_MOCK_HOST_RUNNING_SESSIONS / LIST_DELAY_MS / LIST_FAIL / SUBAGENTS / RPC_LOG
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** 物理收据：每次 mock RPC 追加一行 JSON {"method","at"}（测试可数请求次数）。 */
-function mockNoteRpc(method) {
+/**
+ * 物理收据：每次 mock RPC 追加一行 JSON {"method","at","args"}（测试可数请求次数，
+ * 并可按 args 断言参数透传；契约 §1.5.2 纯增量，既有只读 method 的用例不受影响）。
+ */
+function mockNoteRpc(method, request) {
   const file = process.env.Q20_MOCK_HOST_RPC_LOG;
   if (!file) return;
   try {
-    fs.appendFileSync(file, JSON.stringify({ method: method, at: Date.now() }) + '\n');
+    fs.appendFileSync(file, JSON.stringify({ method: method, at: Date.now(), args: request }) + '\n');
   } catch { /* 收据写入失败不影响被测行为 */ }
 }
 
@@ -303,7 +308,7 @@ function mockSessionListItems() {
  * 生产路径绝不经过本函数。
  */
 function mockHandleRpcAsync(method, request) {
-  mockNoteRpc(method);
+  mockNoteRpc(method, request);
   if (method !== 'session/list') return Promise.resolve(mockHandleRpc(method, request));
   const fail = process.env.Q20_MOCK_HOST_LIST_FAIL === '1';
   const delay = Number(process.env.Q20_MOCK_HOST_LIST_DELAY_MS || 0);
@@ -339,6 +344,20 @@ function mockHandleRpc(method, request) {
       return { ok: true, value: { items: mockSessionListItems() } };
     }
     case 'session/modelCatalog': {
+      // 契约 §5.4 接缝（仅 mock 分支读取，生产零影响）：
+      //   Q20_MOCK_HOST_CATALOG_FAIL=1        → 全部调用失败
+      //   Q20_MOCK_HOST_CATALOG_FAIL_AFTER=n  → 成功 n 次后全部失败（供 A12 先暖缓存再注入失败）
+      mockCatalogCalls += 1;
+      const catalogFailAll = process.env.Q20_MOCK_HOST_CATALOG_FAIL === '1';
+      const failAfterRaw = process.env.Q20_MOCK_HOST_CATALOG_FAIL_AFTER;
+      const failAfter = (typeof failAfterRaw === 'string' && failAfterRaw.trim() !== '' && Number.isFinite(Number(failAfterRaw)))
+        ? Number(failAfterRaw)
+        : -1;
+      if (catalogFailAll || (failAfter >= 0 && mockCatalogCalls > failAfter)) {
+        return { ok: false, error: 'mock: session/modelCatalog injected failure' };
+      }
+      // 契约 §1.5.1 + §5.4：glm-5.3-flash 三档、kimi-k3 两档（defaultEffort:'high'）；
+      // deepseek-v4-flash 不带 reasoning（A1 断言依赖）；宿主 default 带 reasoningEffort:'high'。
       return {
         ok: true,
         value: {
@@ -346,14 +365,35 @@ function mockHandleRpc(method, request) {
             {
               id: 'ponyllm',
               models: [
-                { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash' },
+                {
+                  id: 'glm-5.3-flash',
+                  name: 'GLM-5.3-Flash',
+                  reasoning: {
+                    efforts: [
+                      { id: 'off', name: 'Off' },
+                      { id: 'low', name: 'Low' },
+                      { id: 'high', name: 'High' },
+                    ],
+                    defaultEffort: 'high',
+                  },
+                },
                 { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
-                { id: 'kimi-k3', name: 'Kimi-K3' },
+                {
+                  id: 'kimi-k3',
+                  name: 'Kimi-K3',
+                  reasoning: {
+                    efforts: [
+                      { id: 'low', name: 'Low' },
+                      { id: 'high', name: 'High' },
+                    ],
+                    defaultEffort: 'high',
+                  },
+                },
               ],
             },
             { id: 'local', models: [{ id: 'mock-local-1', name: 'Mock Local 1' }] },
           ],
-          default: { provider: 'ponyllm', model: 'glm-5.3-flash' },
+          default: { provider: 'ponyllm', model: 'glm-5.3-flash', reasoningEffort: 'high' },
         },
       };
     }
@@ -383,8 +423,12 @@ function mockReplyForPrompt(promptText) {
   return `[MOCK] 收到：${p.slice(0, 48) || '（空）'}。本回复由 Q20 测试 mock 宿主合成，不代表任何真实模型输出。`;
 }
 
-/** mock 宿主本地落转录（对齐官方 zstd JSONL 口径，供 /api/history、/api/sessions 直读）。 */
-function mockPersistTranscript(targetCwd, sessionId, promptText, reply) {
+/**
+ * mock 宿主本地落转录（对齐官方 zstd JSONL 口径，供 /api/history、/api/sessions 直读）。
+ * 契约 §1.5.3：header 行补 config:{provider,model,reasoningEffort?}，并追加一条
+ * request/header 事件行携带同一 config（与真实 dsh 事件流同构，供 /api/session/stats 断言）。
+ */
+function mockPersistTranscript(targetCwd, sessionId, promptText, reply, config) {
   try {
     const dir = path.join(SESSIONS_ROOT, projectKey(path.resolve(targetCwd)), sessionId);
     fs.mkdirSync(dir, { recursive: true });
@@ -392,11 +436,15 @@ function mockPersistTranscript(targetCwd, sessionId, promptText, reply) {
     const turn = (mockHostState.turnBySession.get(sessionId) || 0) + 1;
     mockHostState.turnBySession.set(sessionId, turn);
     const now = Date.now();
+    const cfg = (config && typeof config === 'object') ? config : {};
+    const requestConfig = { provider: cfg.provider || '', model: cfg.model || '' };
+    if (cfg.reasoningEffort) requestConfig.reasoningEffort = cfg.reasoningEffort;
     const lines = mockHostState.transcripts.get(sessionId) || [];
     if (lines.length === 0) {
-      lines.push(JSON.stringify({ type: 'header', id: sessionId, cwd: path.resolve(targetCwd), createdAt: now, version: 'mock' }));
+      lines.push(JSON.stringify({ type: 'header', id: sessionId, cwd: path.resolve(targetCwd), createdAt: now, version: 'mock', config: requestConfig }));
       lines.push(JSON.stringify({ type: 'session/title', time: now, data: { title: 'mock-session' } }));
     }
+    lines.push(JSON.stringify({ type: 'request/header', time: now, data: { header: { config: requestConfig } } }));
     lines.push(JSON.stringify({ type: 'user/message', seq: seq + 0, time: now, data: { content: [{ type: 'text', text: String(promptText || '') }], source: { kind: 'user' } } }));
     lines.push(JSON.stringify({ type: 'assistant/message', seq: seq + 1, time: now, surfaceOp: 'append', data: { turn, step: 1, message: { content: [{ type: 'text', text: reply }] }, stream: [] } }));
     lines.push(JSON.stringify({ type: 'turn/end', seq: seq + 2, time: now, data: { turn, reason: { kind: 'done' } } }));
@@ -409,7 +457,7 @@ function mockPersistTranscript(targetCwd, sessionId, promptText, reply) {
 }
 
 /** mock 宿主合成一次完整对话回合（delta → turn/end → done），与真实路径同构。 */
-function runMockChatTurn(task, sessionId, targetCwd, promptText) {
+function runMockChatTurn(task, sessionId, targetCwd, promptText, config) {
   const handler = createSessionEventHandler(task);
   const reply = mockReplyForPrompt(promptText);
   const seq = mockHostState.seqBySession.get(sessionId) || 0;
@@ -422,7 +470,7 @@ function runMockChatTurn(task, sessionId, targetCwd, promptText) {
     data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: reply }] }, stream: [] },
   });
   handler.handleSessionEvent({ type: 'turn/end', seq: seq + 2, time: now, data: { turn: 1, reason: { kind: 'done' } } });
-  mockPersistTranscript(targetCwd, sessionId, promptText, reply);
+  mockPersistTranscript(targetCwd, sessionId, promptText, reply, config);
   task.status = 'done';
   task.finalResponse = reply;
   broadcastTaskEvent(task, 'done', { sessionId, finalResponse: reply });
@@ -1676,7 +1724,7 @@ function openUserEventsStream(ws, streamId) {
  *   'done'        ：任务终结事件（done/error/cancelled）已发出；
  *   'failed'      ：宿主已接管会话后的失败，任务错误已发出，不可回退。
  */
-async function runChatViaHostRpc(task, { targetCwd, provider, model, promptText, promptMode, receiptIds, imagePart }) {
+async function runChatViaHostRpc(task, { targetCwd, provider, model, promptText, promptMode, receiptIds, imagePart, reasoningEffort }) {
   const sessionId = task.sessionId;
   const failTask = (message) => {
     task.status = 'error';
@@ -1715,15 +1763,18 @@ async function runChatViaHostRpc(task, { targetCwd, provider, model, promptText,
     try { invalidateSessionsCache(targetCwd); } catch {}
   }
 
-  // 2) 模型选择（与子进程模式 per-run provider/model 语义一致）
+  // 2) 模型选择（与子进程模式 per-run provider/model 语义一致）；契约 §1.3：
+  // 思考强度属「下一请求模型选择」，仅非空才随 selectModel 下发（缺省走供应商默认）。
   if (provider && model) {
-    const selected = await callDshWebRpc('session/selectModel', { sessionId, provider, model }, 10000);
+    const selectRequest = { sessionId, provider, model };
+    if (reasoningEffort) selectRequest.reasoningEffort = reasoningEffort;
+    const selected = await callDshWebRpc('session/selectModel', selectRequest, 10000);
     if (!selected.ok) return failTask(selected.error || 'session/selectModel failed');
   }
 
   // 2.5) mock 宿主：跳过真实 mux/WS/follow，合成完整回合（delta → done + 本地转录）。
   if (Q20_MOCK_HOST) {
-    return runMockChatTurn(task, sessionId, targetCwd, promptText);
+    return runMockChatTurn(task, sessionId, targetCwd, promptText, { provider, model, reasoningEffort });
   }
 
   // 3) 打开 follow 流（ /api/remote.mux WebSocket 载体 ）
@@ -2840,6 +2891,31 @@ function readDshSettings() {
 }
 
 /**
+ * 契约 §1.1：宿主目录 `m.reasoning` 清洗为前端契约形状。
+ *   - efforts 必须为非空数组；逐项只接受 id 为非空 string，name 非空 string 回退为 id，
+ *     description 仅 string 才透传；畸形项丢弃，全空则整体省略（返回 null）。
+ *   - defaultEffort 仅 string 透传（不校验是否在 efforts 内，前端负责回退）。
+ */
+function normalizeModelReasoning(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.efforts)) return null;
+  const efforts = [];
+  for (const e of raw.efforts) {
+    if (!e || typeof e !== 'object') continue;
+    if (typeof e.id !== 'string' || !e.id) continue;
+    const effort = {
+      id: e.id,
+      name: (typeof e.name === 'string' && e.name) ? e.name : e.id,
+    };
+    if (typeof e.description === 'string') effort.description = e.description;
+    efforts.push(effort);
+  }
+  if (efforts.length === 0) return null;
+  const reasoning = { efforts };
+  if (typeof raw.defaultEffort === 'string') reasoning.defaultEffort = raw.defaultEffort;
+  return reasoning;
+}
+
+/**
  * 在线权威路径：宿主 RPC `session/modelCatalog`（与 dsh web 官方模型选择器同一数据源）。
  * 返回 null 表示宿主不可达或目录为空，调用方退回磁盘镜像。
  *
@@ -2861,13 +2937,17 @@ async function readModelCatalogFromHost(disk) {
       const key = `${group.id}:${m.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      models.push({
+      const modelEntry = {
         provider: group.id,
         model: m.id,
         name: m.name || m.id,
         // 目录本身不带 contextWindow（容量由适配器配置声明），用磁盘镜像补齐ctx环
         contextWindow: Number(disk.contextWindows[key]) || 0,
-      });
+      };
+      // 契约 §1.1：思考强度元数据透传（畸形数据清洗后为空则整体省略该字段）
+      const reasoning = normalizeModelReasoning(m.reasoning);
+      if (reasoning) modelEntry.reasoning = reasoning;
+      models.push(modelEntry);
     }
   }
   if (models.length === 0) return null;
@@ -2878,7 +2958,18 @@ async function readModelCatalogFromHost(disk) {
     model: hostDefault.model || disk.current.model,
     permission: disk.current.permission,
   };
-  if (hostDefault.reasoningEffort) current.reasoningEffort = hostDefault.reasoningEffort;
+  // 契约 §1.1 current.reasoningEffort：宿主 default.reasoningEffort 优先；缺失时回退为
+  // 当前模型 reasoning.defaultEffort（对齐 dsh ModelSelect 的 effectiveEffort 语义）；
+  // 仍缺失则省略该字段。
+  let currentEffort = (typeof hostDefault.reasoningEffort === 'string') ? hostDefault.reasoningEffort : '';
+  if (!currentEffort) {
+    const currentModelKey = `${current.provider}:${current.model}`;
+    const matched = models.find((mm) => `${mm.provider}:${mm.model}` === currentModelKey);
+    if (matched && matched.reasoning && typeof matched.reasoning.defaultEffort === 'string') {
+      currentEffort = matched.reasoning.defaultEffort;
+    }
+  }
+  if (currentEffort) current.reasoningEffort = currentEffort;
 
   const currentKey = `${current.provider}:${current.model}`;
   if (!seen.has(currentKey)) {
@@ -2895,27 +2986,36 @@ async function readModelCatalogFromHost(disk) {
 
 /**
  * 模型目录唯一入口：宿主 RPC 优先（管道①），宿主不可达时退回磁盘镜像（管道②兜底）。
+ * 契约 §1.2：`force` 绕过 30s TTL 强制回源并照常回写缓存（供 /api/bootstrap?refresh=1）。
  */
 let modelCatalogCache = null;
 let modelCatalogCacheAt = 0;
 const MODEL_CATALOG_TTL_MS = 30000;
 
-async function readModelCatalog() {
+async function readModelCatalog(opts = {}) {
+  const force = !!(opts && opts.force);
   const now = Date.now();
-  if (modelCatalogCache && now - modelCatalogCacheAt < MODEL_CATALOG_TTL_MS) {
+  if (!force && modelCatalogCache && now - modelCatalogCacheAt < MODEL_CATALOG_TTL_MS) {
     return modelCatalogCache;
   }
   const disk = readDshSettings();
   try {
     const host = await readModelCatalogFromHost(disk);
     if (host) {
-      modelCatalogCache = host;
-      modelCatalogCacheAt = now;
+      // 契约 §5.2 单调保护：本次请求起点早于当前缓存起点时（并发乱序），
+      // 跳过快照回写，避免旧目录覆盖新目录。
+      if (now >= modelCatalogCacheAt) {
+        modelCatalogCache = host;
+        modelCatalogCacheAt = now;
+      }
       return host;
     }
   } catch (err) {
     console.warn('[MODEL SOURCE] host modelCatalog failed:', err.message);
   }
+  // 契约 §5.2：强制回源失败/超时时优先沿用上一份有效目录（缓存优先，磁盘兜底）；
+  // 不得把「无 reasoning 的磁盘镜像」当作强制刷新结果返回（会抹掉前端思考强度元数据）。
+  if (force && modelCatalogCache) return modelCatalogCache;
   // 磁盘镜像不进 TTL 缓存（读取磁盘 settings 文件耗时可忽略，宿主恢复后下一次请求可立即重新连接宿主）
   return disk;
 }
@@ -5234,6 +5334,8 @@ async function getSessionStats(targetCwd, sessionId) {
       isRunning: false,
       provider: '',
       model: '',
+      // 契约 §1.4：无转录亦无 in-flight 任务 → 均缺失回 ''
+      reasoningEffort: '',
       turns: 0,
       steps: 0,
       toolCalls: 0,
@@ -5275,6 +5377,8 @@ async function getSessionStats(targetCwd, sessionId) {
       isRunning,
       provider: task?.provider || '',
       model: task?.model || '',
+      // 契约 §1.4：无转录（in-flight）分支取任务当前思考强度，缺失回 ''
+      reasoningEffort: task?.reasoningEffort || '',
       turns: task ? 1 : 0,
       steps: 0,
       toolCalls: 0,
@@ -5303,6 +5407,9 @@ async function getSessionStats(targetCwd, sessionId) {
       ...cached.stats,
       provider: isRunning && task?.provider ? task.provider : cached.stats.provider,
       model: isRunning && task?.model ? task.model : cached.stats.model,
+      // 契约 §5.1（§1.4 修订）：在途任务与 provider/model 同口径覆盖（空串同样覆盖），
+      // 杜绝「model 属本回合、effort 属上回合」的错配。
+      reasoningEffort: isRunning ? (task?.reasoningEffort || '') : (cached.stats.reasoningEffort || ''),
       isRunning,
       state,
     };
@@ -5317,6 +5424,7 @@ async function getSessionStats(targetCwd, sessionId) {
   let mode = 'standard';
   let provider = '';
   let model = '';
+  let reasoningEffort = '';
   let turns = 0;
   let lastTurn = null;
   let steps = 0;
@@ -5364,6 +5472,11 @@ async function getSessionStats(targetCwd, sessionId) {
         if (o.data?.header?.config) {
           provider = o.data.header.config.provider || provider;
           model = o.data.header.config.model || model;
+          // 契约 §5.1（§1.4 修订）：与上游 foldRequestHeader 同构——每遇一条 request/header
+          // 整体替换当前桩，最新请求头未带该键即回落 ''（禁止保留上一回合的非空值）。
+          reasoningEffort = (typeof o.data.header.config.reasoningEffort === 'string')
+            ? o.data.header.config.reasoningEffort
+            : '';
         }
       } else if (o.type === 'llm/retry-started') {
         // 对齐 dsh tokenUsageProjection 关槽：重试 settlement 全额累加
@@ -5439,6 +5552,8 @@ async function getSessionStats(targetCwd, sessionId) {
     isRunning,
     provider: provider || '',
     model: model || '',
+    // 契约 §5.1（§1.4 修订）：in-flight 时以任务当前档位覆盖转录折叠值（空串同样覆盖）
+    reasoningEffort: isRunning ? (task?.reasoningEffort || '') : reasoningEffort,
     turns,
     steps,
     toolCalls,
@@ -6075,9 +6190,14 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'GET' && pathname === '/api/bootstrap') {
     try {
-      const { models, current, permissions } = await readModelCatalog();
+      // 契约 §1.2：refresh=1 → 目录绕过 30s TTL 回源（并照常回写缓存），
+      // 同时保留既有「宿主存活探测强制刷新」语义；无 refresh=1 时行为不变。
+      const refresh = searchParams.get('refresh') === '1';
+      // 普通请求走 TTL 缓存路径；refresh=1 强制回源（契约 §1.2）
+      const catalog = refresh ? await readModelCatalog({ force: true }) : await readModelCatalog();
+      const { models, current, permissions } = catalog;
       const workspaces = getWorkspaces();
-      const dshAlive = await checkDshHostAlive(searchParams.get('refresh') === '1');
+      const dshAlive = await checkDshHostAlive(refresh);
       sendJson(res, 200, {
         workspaces,
         models,
@@ -7290,6 +7410,15 @@ const server = http.createServer((req, res) => {
       sendJson(res, 400, { error: 'Missing required field "prompt"' });
       return;
     }
+    // 契约 §1.3：思考强度 reasoningEffort —— 缺省 / '' 不下发（走供应商默认）；
+    // 非 string 或长度 > 64 一律在 SSE 头之前拦截为 400（无副作用）。
+    if (body.reasoningEffort !== undefined && body.reasoningEffort !== '') {
+      if (typeof body.reasoningEffort !== 'string' || body.reasoningEffort.length > 64) {
+        sendJson(res, 400, { error: 'Invalid "reasoningEffort": expected string' });
+        return;
+      }
+    }
+    const reasoningEffort = (typeof body.reasoningEffort === 'string') ? body.reasoningEffort : '';
     // image 内联校验（与 /api/session/prompt 同契约）：SSE 头之前拦截，无副作用
     const streamImg = toPromptImagePart(image);
     if (!streamImg.ok) {
@@ -7362,6 +7491,8 @@ const server = http.createServer((req, res) => {
       cwd: cwd ? path.resolve(cwd) : process.cwd(),
       provider: taskProvider,
       model: taskModel,
+      // 契约 §1.4：in-flight（尚无转录）时 stats 的 reasoningEffort 来源
+      reasoningEffort: reasoningEffort,
       harness: null,
       status: 'running',
       startedAt: Date.now(),
@@ -7446,6 +7577,7 @@ const server = http.createServer((req, res) => {
           promptMode,
           receiptIds: receiptIds,
           imagePart: streamImg.part,
+          reasoningEffort: reasoningEffort,
         }).catch((err) => {
           console.warn(`[ENGINE] host rpc unexpected failure: ${err.message}`);
           return 'failed';
@@ -7463,10 +7595,12 @@ const server = http.createServer((req, res) => {
         console.log('[ENGINE] DSH Web unreachable → falling back to local SDK subprocess');
 
         // ── 回退引擎（DSH Web 离线）：本地 SDK 子进程 + workspace.json 直写兜底 ──
+        // 契约 §1.3：SDK 兜底同样透传思考强度（仅非空才带，上游 SDK ModelSelection 已支持）
         const harness = new DeepSeekHarness({
           cwd: targetCwd,
           provider: targetProvider,
           model: targetModel,
+          ...(reasoningEffort ? { reasoningEffort: reasoningEffort } : {}),
         });
         task.harness = harness;
 

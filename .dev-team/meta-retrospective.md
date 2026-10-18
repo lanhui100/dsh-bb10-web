@@ -168,3 +168,35 @@
 
 ## 四、元协议迭代建议
 - **自愈闭环防饥饿规则**：前端定时器中，不得使用任一特定业务字段（如工作区、选中会话）作为多功能合并轮询的顶层阻断门禁；底层基础设施的健康轮询必须无条件独立运作，确保在任何局部异常态下均保持持续自愈能力。
+
+---
+
+# Meta Retrospective — 模型思考强度选择 + 模型目录随 dsh 刷新（wave-2026-10-18）
+
+- 波次：`wave-3-reasoning-2026-10-18`（语义分支 `reasoning-effort-2026-10-18`）
+- 分级：**B 级**（机械触发：外部 IO（宿主 `session/modelCatalog`/`selectModel` RPC）、跨 `server.mjs`+`static/index.html`+`tests/acceptance/` 多文件、UI 契约变更）
+- 红相锚定：commit `36c073b` / tag `wave-3-reasoning-red`；契约冻结 `.dev-team/contract-wave-2026-10-18.md`
+- 名册：Lead + test-agent + executor-server + executor-web；审查走 Subagent 池（不占名册槽位）
+- 交付：`server.mjs`（+142/−26 区域）、`static/index.html`（+268 区域）、`tests/acceptance/suite-reasoning.mjs`（新，A1–A8 冻结）
+
+## 一、通信拓扑与信噪比（Topology & Noise）
+- 三名常驻成员各自只读侦察后先回报「改动点 ↔ 契约条款」计划，再等 Lead 明确「RED FROZEN」放行；零并行脏写。
+- 执行者回报以物理退出码 + 断言计数为主（`suite-reasoning 8/8`、`test-unit 35/35`、`run-all 4 套件 failed=0`），无过程吹捧。
+- 噪声点：首轮两个 L3 Subagent 的结论未回流（无落盘、结束即不可寻址）；改为「结论必须写入 .dev-team/review-l3*.json + send_message 一行回执」后重跑成功，Lead 以 `jq`/python 校验 JSON verdict。教训：审查者的交付物是文件，不是消息。
+- 第二轮 2 路 L3 均判 FAIL（合计 7 条 finding，含 2 条真实浏览器复现），触发契约 v1.1 + 红相 A9–A12 + 双写域缺陷修复；修后同一套件 12/12 绿。
+
+## 二、门禁穿透与误杀率（Gate Penetration / False Negatives & Positives）
+- 独立 Test Agent 先写 A1–A8 并真实红相（pass=1 fail=7，无语法/导入错误）；实现后同套件 8/8 全绿，红绿双相可复现（`tests/acceptance/artifacts/red-reasoning.log`）。L3 缺陷暴露后追加 A9–A12 红相（pass=8 fail=4，`red-reasoning2.log`），修复后 12/12 绿；A11 的 marker 断言被判 TEST-DEFECT（首个 ● 必命中模型行），由 Test Agent 最小修正并重锚（commit `e8db4f2`），主断言红相证据保留。
+- A2 用 RPC 收据数（普通两次 bootstrap ≤1 次、`?refresh=1` +1）证明 TTL 绕过真实生效，而非只改注释；A3 用收据 `args.reasoningEffort` 证明尚未被前端丢弃。
+- 误杀风险：`test-unit.mjs` 存在源码字面量断言 `await readModelCatalog()`，实现改造为分支调用时会误红；executor-server 以保留字面写法（不碰测试文件）通过——属既有测试脆弱点，已记录待治理。
+- 真实宿主验收：临时实例（3098→宿主 3080）实测 26 模型/4 个带 reasoning，真实 chromium 720×720 面板可选 4 档、徽标 `模型 · Low`、Console Error=0，物理截图 `docs/release/2026-10-18-live-effort-panel.png`；证明不是 mock 自证。
+
+## 三、分工契约与隔离有效性（Contract Isolation）
+- 写域严格正交（测试/服务端/前端三分），Join Barrier 前 `git diff --name-only` 与 `write_scopes` 完全一致，无越界。
+- 契约冻结在写代码前（红相 commit 内），执行者未改验收件（测试文件 444 只读），未出现「运动员兼裁判」。
+- 契约中关键接缝（mock catalog reasoning / 收据 args / 转录 request/header）由服务端实现而非测试侧伪造，避免测试与实现互相迁就。
+
+## 四、元协议迭代建议（Self-Evolving Protocol）
+- B 级波次的审查结果必须落盘 `.dev-team/review-<id>.json` 并由 Lead `jq -e` 校验，**不依赖 Subagent 消息回流**（本次教训）。
+- 对「消费者契约扩展」类波次，验收矩阵应默认包含一条「真实宿主在线」用例（本次由 Lead 手工补做）；建议把 `suite-host.mjs` 的 DEGRADED 机制扩展为可容纳目录/档位断言。
+- 冻结套件新增第 5 个 suite 后，`run-all.mjs` 成为 4 套件入口；后续波次注意别把 suite 数量当契约（SUITES 数组是唯一真源）。

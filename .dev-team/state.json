@@ -123,7 +123,7 @@
     "task-3 (T-WEB web)"
    ],
    "baseline_commit": "b233f8a",
-   "red_commit": null,
+   "red_commit": "36c073b",
    "contract": ".dev-team/contract-wave-2026-10-18.md",
    "green_commit": null,
    "status": "in_progress",
@@ -143,8 +143,47 @@
    "root_cause": "R1-R5 catalog reasoning/selectModel reasoningEffort 被丢弃（功能缺失）；R6-R9 前端目录仅首屏快照、openModel 不刷新，服务端 30s TTL 无强制刷新入口，长驻页面永不跟随 dsh 模型清单变化",
    "counters": {
     "L2T_fail_streak": {},
-    "review_rounds": 0
-   }
+    "review_rounds": 2,
+    "reviews": {
+     "L3-A": {
+      "verdict": "FAIL",
+      "findings": 2,
+      "report": ".dev-team/review-l3a-wave3.json",
+      "fixed_by": "S1/S2/W1"
+     },
+     "L3-B": {
+      "verdict": "FAIL",
+      "findings": 1,
+      "report": ".dev-team/review-l3b-wave3.json",
+      "fixed_by": "W1"
+     },
+     "L3-A-extra": {
+      "verdict": "FAIL",
+      "findings": 4,
+      "report": "inline message",
+      "fixed_by": "W1/W2/W3/W4/S2/S3"
+     },
+     "L3-B-extra": {
+      "verdict": "FAIL",
+      "findings": 3,
+      "report": "inline message",
+      "fixed_by": "W2/W3/S1"
+     }
+    }
+   },
+   "red_tag": "wave-3-reasoning-red",
+   "gates": {
+    "node_check": "exit 0",
+    "es5": "PASS (acorn 7.4.1, 1 inline script)",
+    "acceptance_reasoning": "suite-reasoning A1-A8 pass=8 fail=0 exit=0",
+    "acceptance_run_all": "suites=4 failed=0 skipped=0 exit=0",
+    "test_unit": "35/35 exit 0",
+    "test_decoupling": "exit 0",
+    "test_suite": "7/7 exit 0",
+    "live_host_verify": "临时实例 3098 -> 宿主 3080：26 models / 4 with reasoning；真实 chromium 720x720 面板 4 档 + Low 徽标 ' · Low' + ConsoleError=0；截图 docs/release/2026-10-18-live-effort-panel.png"
+   },
+   "red2_commit": "b37376a",
+   "red2_tag": "wave-3-reasoning-red2"
   }
  ]
 }

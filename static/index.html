@@ -3585,6 +3585,110 @@
       return sessionModelStore[sid] || '';
     }
     /* @Q20-SESSMODEL-END */
+    /* @Q20-EFFORT-START */
+    // 思考强度（reasoningEffort）选择态：目录元数据 modelReasoningMap 由 bootstrap/目录重建
+    // 全量刷新（契约 §1.1 + §1.6）。currentReasoningEffort 是组合器当前档位（'' = 供应商默认），
+    // sessionEffortStore 是会话级记忆（与 sessionModelStore 同生命周期、同容量）；
+    // modelChoiceRevision 兼作其版本号。任何写入都必须兼顾徽标/发送/stats 校真三处口径。
+    var modelReasoningMap = {};
+    var currentReasoningEffort = '';
+    var sessionEffortStore = {};
+    var modelCatalogRefreshInFlight = false;
+    function rebuildModelReasoningMap(models) {
+      modelReasoningMap = {};
+      if (!models || !models.length) return;
+      for (var rmi = 0; rmi < models.length; rmi++) {
+        var rm = models[rmi];
+        if (!rm || !rm.reasoning) continue;
+        var effortsRaw = rm.reasoning.efforts;
+        if (!effortsRaw || typeof effortsRaw.length !== 'number' || effortsRaw.length === 0) continue;
+        var effortList = [];
+        for (var rme = 0; rme < effortsRaw.length; rme++) {
+          var rItem = effortsRaw[rme];
+          if (!rItem || typeof rItem.id !== 'string' || !rItem.id) continue;
+          effortList.push({
+            id: rItem.id,
+            name: (typeof rItem.name === 'string' && rItem.name) ? rItem.name : rItem.id
+          });
+        }
+        if (!effortList.length) continue;
+        // 契约 v1.1 §5.3-2：defaultEffort 必须属于 efforts，不属于时视为未定义（''），
+        // 面板按「无默认」渲染并前置「默认（供应商默认）」项。
+        var rawDefaultEffort = (typeof rm.reasoning.defaultEffort === 'string') ? rm.reasoning.defaultEffort : '';
+        modelReasoningMap[(rm.provider || '') + ':::' + (rm.model || '')] = {
+          efforts: effortList,
+          defaultEffort: isEffortInList(effortList, rawDefaultEffort) ? rawDefaultEffort : ''
+        };
+      }
+    }
+    function getModelReasoning(val) {
+      if (!val) return null;
+      return modelReasoningMap[val] || null;
+    }
+    // 档位 id 合法性（契约 v1.1 §5.3-2）：defaultEffort 必须属于 efforts，否则视为未定义。
+    function isEffortInList(efforts, effortId) {
+      if (!efforts || !effortId || typeof effortId !== 'string') return false;
+      for (var eyi = 0; eyi < efforts.length; eyi++) {
+        if (efforts[eyi] && efforts[eyi].id === effortId) return true;
+      }
+      return false;
+    }
+    function getEffortDisplayName(val, effortId) {
+      var er = getModelReasoning(val);
+      if (!er || !effortId) return '';
+      for (var edi = 0; edi < er.efforts.length; edi++) {
+        if (er.efforts[edi].id === effortId) return er.efforts[edi].name || effortId;
+      }
+      return effortId;
+    }
+    // 档位归一（对齐 dsh web effectiveEffort = current.reasoningEffort ?? defaultEffort）：
+    // 无 reasoning 的模型恒为 ''；无效档位与 '' 都回落该模型 defaultEffort（且 default 必须是
+    // efforts 成员——契约 v1.1 §5.3-2 防御，非法值不得进入徽标/发送载荷）。
+    function normalizeEffortForModel(val, effort) {
+      var nr = getModelReasoning(val);
+      if (!nr) return '';
+      if (isEffortInList(nr.efforts, effort)) return effort;
+      return isEffortInList(nr.efforts, nr.defaultEffort) ? nr.defaultEffort : '';
+    }
+    function recordSessionEffort(sid, effort) {
+      if (!sid) return;
+      if (typeof effort !== 'string') effort = '';
+      if (sessionEffortStore[sid] === effort) return;
+      sessionEffortStore[sid] = effort;
+      var effortKeys = [];
+      for (var eK in sessionEffortStore) {
+        if (Object.prototype.hasOwnProperty.call(sessionEffortStore, eK)) effortKeys.push(eK);
+      }
+      while (effortKeys.length > SESSION_MODEL_STORE_CAP) {
+        var effortDrop = effortKeys.shift();
+        try { delete sessionEffortStore[effortDrop]; } catch (eDropEffort) {}
+      }
+    }
+    function getSessionEffortVal(sid) {
+      if (!sid) return '';
+      if (Object.prototype.hasOwnProperty.call(sessionEffortStore, sid)) return sessionEffortStore[sid];
+      return '';
+    }
+    // 面板/徽标/发送统一口径：优先会话记忆（含显式 ''），否则组合器当前档位，再按模型归一。
+    function getEffectiveReasoningEffort(val) {
+      var effortSid = '';
+      try { effortSid = getSid(); } catch (eEffSid) {}
+      var rawEffort = currentReasoningEffort;
+      if (effortSid && Object.prototype.hasOwnProperty.call(sessionEffortStore, effortSid)) {
+        rawEffort = sessionEffortStore[effortSid];
+      }
+      return normalizeEffortForModel(val, rawEffort);
+    }
+    // 切模型语义（对齐 dsh ModelSelect 的 selection 构造，契约 v1.1 §5.3-1）：
+    // 仅当 provider 与 model 完全相同（prevVal === nextVal）时保留当前档位；
+    // 换任何模型（含同 provider 不同模型）一律取新模型 reasoning.defaultEffort（无则 ''）。
+    function effortOnModelChange(prevVal, nextVal) {
+      var nextReason = getModelReasoning(nextVal);
+      if (!nextReason) return '';
+      if (prevVal === nextVal) return normalizeEffortForModel(nextVal, currentReasoningEffort);
+      return isEffortInList(nextReason.efforts, nextReason.defaultEffort) ? nextReason.defaultEffort : '';
+    }
+    /* @Q20-EFFORT-END */
     // 当前会话目标（goal）单一状态源：null = 无目标；syncGoalRing 单点驱动红圈。
     var goalState = null;
     var isStatsLoading = false;
@@ -3998,8 +4102,16 @@
       var bsid = '';
       try { bsid = getSid(); } catch (eB) {}
       var bval = getSessionModelVal(bsid);
-      var bparts = getCurrentSessionModelVal(bsid).split(':::');
-      return bparts[1] || (bval.split(':::')[1] || '');
+      var curModelVal = getCurrentSessionModelVal(bsid);
+      var bparts = curModelVal.split(':::');
+      var baseName = bparts[1] || (bval.split(':::')[1] || '');
+      // 思考强度后缀（契约 §1.6）：仅当该模型有 reasoning 且生效档位非空时显示
+      // 「模型名 · 档位显示名」（显示名取目录 name，缺失回退 id；'' 且无默认则不加后缀）。
+      var badgeEffort = getEffectiveReasoningEffort(curModelVal);
+      if (!badgeEffort) return baseName;
+      var badgeEffortName = getEffortDisplayName(curModelVal, badgeEffort);
+      if (!badgeEffortName) return baseName;
+      return baseName ? (baseName + ' · ' + badgeEffortName) : badgeEffortName;
     }
 
     function getModelCtxWindow() {
@@ -5330,7 +5442,15 @@
       var opts = modelSelect.options;
       for (var i = 0; i < opts.length; i++) {
         if (opts[i].value === defVal) {
+          var prevDefaultModelVal = '';
+          try { prevDefaultModelVal = modelSelect.value || ''; } catch (ePrevDefModel) {}
           modelSelect.selectedIndex = i;
+          // 契约 v1.1 §5.3-4：与 applyModelChoice / D 键同一语义，改变选择后必须重算档位；
+          // 新建会话不得沿用上一模型的思考强度。本块同时被 test-unit 以纯逻辑沙箱提取
+          // （无 effort 运行时），故以 typeof 守卫保持可测。
+          if (typeof effortOnModelChange === 'function') {
+            currentReasoningEffort = effortOnModelChange(prevDefaultModelVal, modelSelect.value || '');
+          }
           return true;
         }
       }
@@ -5933,6 +6053,8 @@
       modelSelect.innerHTML = '';
       modelCtxWinMap = {};
       models = models || [];
+      // 目录是 reasoning 元数据的唯一事实源：每次重建都全量刷新（旧值清空，契约 §1.6）。
+      rebuildModelReasoningMap(models);
       for (var j = 0; j < models.length; j++) {
         var m = models[j];
         var optVal = (m.provider || '') + ':::' + (m.model || '');
@@ -5966,6 +6088,10 @@
           try { modelSelect.selectedIndex = 0; } catch (e2) {}
         }
       }
+      // 目录重建后档位归一：模型仍在则保留当前档位；模型消失/换档机构则按该模型 defaultEffort 收敛。
+      var effModelVal = '';
+      try { effModelVal = modelSelect.value || ''; } catch (eEffRebuild) {}
+      currentReasoningEffort = normalizeEffortForModel(effModelVal, currentReasoningEffort);
     }
 
     function rebuildPermSelect(permissions, current) {
@@ -6171,6 +6297,38 @@
       // Reconcile the panel against the current session, not only the global
       // composer selection. The async callback re-renders the active row.
       try { if (currentSessionId && typeof loadSessionStats === 'function') loadSessionStats(); } catch (eOM) {}
+      // 目录随 dsh 刷新（契约 §1.6，修 R6–R9）：面板打开即异步强制绕过 30s TTL 取一次
+      // 最新目录；modelCatalogRefreshInFlight 防重入；失败静默（面板照常可用）。
+      if (modelCatalogRefreshInFlight) return;
+      modelCatalogRefreshInFlight = true;
+      var prevCatalogModelVal = '';
+      try { prevCatalogModelVal = modelSelect.value || ''; } catch (eOM1) {}
+      var catalogXhr = new XMLHttpRequest();
+      catalogXhr.open('GET', '/api/bootstrap?refresh=1', true);
+      catalogXhr.onreadystatechange = function() {
+        if (catalogXhr.readyState !== 4) return;
+        modelCatalogRefreshInFlight = false;
+        var catalogStatus = 0;
+        try { catalogStatus = catalogXhr.status; } catch (eOM2) {}
+        if (catalogStatus !== 200 && catalogStatus !== 0) return;
+        try {
+          var catalogData = JSON.parse(catalogXhr.responseText);
+          // 保留用户当前 provider:::model（rebuild 内已优先匹配 prevVal）与 effort（按新目录归一）。
+          rebuildModelSelect(catalogData && catalogData.models, catalogData && catalogData.current);
+          var afterCatalogModelVal = '';
+          try { afterCatalogModelVal = modelSelect.value || ''; } catch (eOM3) {}
+          if (afterCatalogModelVal !== prevCatalogModelVal) {
+            currentReasoningEffort = normalizeEffortForModel(afterCatalogModelVal, currentReasoningEffort);
+          }
+          updateWsBadge();
+          if (isModelOpen) renderModelTree();
+        } catch (eOM4) {}
+      };
+      try {
+        catalogXhr.send();
+      } catch (eOM5) {
+        modelCatalogRefreshInFlight = false;
+      }
     }
 
     function closeModel() {
@@ -6187,7 +6345,11 @@
     // "M 面板改完没生效、徽标仍显默认/旧模型"。
     function applyModelChoice(item) {
       if (!item || !modelSelect) return;
+      var prevModelVal = '';
+      try { prevModelVal = modelSelect.value || ''; } catch (ePrevMV) {}
       modelSelect.selectedIndex = item.idx;
+      // 思考强度随模型切换（契约 §1.6）：同路由保留有效档位，换路由取新模型 defaultEffort。
+      currentReasoningEffort = effortOnModelChange(prevModelVal, modelSelect.value || '');
       modelChoiceRevision++;
       // 新建空白态切换模型时，清除旧会话遗留的 stats，确保徽标与面板忠实反映组合器刚选的模型
       if (!currentSessionId) {
@@ -6196,6 +6358,7 @@
       try {
         if (currentSessionId && modelSelect.value) {
           recordSessionModel(currentSessionId, modelSelect.value, modelChoiceRevision);
+          recordSessionEffort(currentSessionId, currentReasoningEffort);
           // 服务端确认前标记脏：此后任何 stats 回包（无论请求何时发出）都不得
           // 拿转录旧模型回滚本次选取；start 回执携带同模型时解除。
           sessionModelDirty[currentSessionId] = true;
@@ -6204,6 +6367,29 @@
       updateWsBadge();
       closeModel();
       setStatus('模型: ' + item.text);
+    }
+
+    // 思考强度档位唯一入口（面板点击 / J·K + Enter 共用，契约 §1.6）：
+    // 落地会话记忆、刷新徽标、收起面板、状态栏提示。
+    // 契约 v1.1 §5.3-3：effort 本地变更必须与模型变更同权——推进 sessionModelRevision
+    // 并置 sessionModelDirty，使早于本次改档发出的在途 /api/session/stats 不能回滚用户选择
+    // （面板开启时 openModel 自带 stats 请求，慢回包在 Q20 上是常态）。
+    function applyEffortChoice(modelVal, item) {
+      if (!item) return;
+      var effortId = (typeof item.id === 'string') ? item.id : '';
+      var effortName = item.name || effortId || '默认（供应商默认）';
+      currentReasoningEffort = normalizeEffortForModel(modelVal, effortId);
+      modelChoiceRevision++;
+      try {
+        if (currentSessionId) {
+          recordSessionEffort(currentSessionId, currentReasoningEffort);
+          sessionModelRevision[currentSessionId] = modelChoiceRevision;
+          sessionModelDirty[currentSessionId] = true;
+        }
+      } catch (eEffApply) {}
+      updateWsBadge();
+      closeModel();
+      setStatus('思考强度: ' + effortName);
     }
 
     function openPerm() {
@@ -6296,6 +6482,15 @@
                 sessionModelRevision[sid] = requestRevision;
                 sessionStatsModelRevision[sid] = requestRevision;
                 applySessionModelToSelector(statsModelVal);
+              }
+              // 思考强度 stats 校真（契约 §1.6）：与模型同守卫，本地有更新选择时不回滚；
+              // 服务端转录真值非空才同步（旧服务端无该字段时保持本地选择）。
+              if (latestSessionStats && sid && requestRevision >= (sessionModelRevision[sid] || 0) && !sessionModelDirty[sid]) {
+                var statsEffortVal = latestSessionStats.reasoningEffort;
+                if (typeof statsEffortVal === 'string' && statsEffortVal) {
+                  currentReasoningEffort = statsEffortVal;
+                  recordSessionEffort(sid, statsEffortVal);
+                }
               }
               updateWsBadge();
               if (isModelOpen) renderModelTree();
@@ -7406,6 +7601,53 @@
         })(providerList[p]);
       }
 
+      // 3. 思考强度分组（契约 §1.6）：当前选中模型带 reasoning 时，在模型分组之后追加
+      //    可折叠分组（collapsedProviders['__effort__']），子项单行紧凑、不额外撑高。
+      var effortModelVal = '';
+      try { effortModelVal = modelSelect.value || ''; } catch (eEffModel) {}
+      var effortReason = getModelReasoning(effortModelVal);
+      var effortCurrent = getEffectiveReasoningEffort(effortModelVal);
+      if (effortReason) {
+        var effortCollapsed = collapsedProviders['__effort__'];
+        if (effortCollapsed === undefined) effortCollapsed = false;
+        var effortArrow = effortCollapsed ? '▶ ' : '▼ ';
+        var effortGroupTitle = effortArrow + '⚙ 思考强度 (' + effortReason.efforts.length + '档)';
+        var effortGroupNode = mkNode(escapeHtml(effortGroupTitle), 'tree-group', function() {
+          collapsedProviders['__effort__'] = !collapsedProviders['__effort__'];
+          renderModelTree();
+        });
+        modelTree.appendChild(effortGroupNode);
+        modelNodes.push({ el: effortGroupNode, kind: 'effort-group' });
+        if (!effortCollapsed) {
+          // defaultEffort 未定义时前置「默认（供应商默认）」项（档位 id 为 ''）
+          var effortItems = [];
+          if (!effortReason.defaultEffort) {
+            effortItems.push({ id: '', name: '默认（供应商默认）' });
+          }
+          for (var efi = 0; efi < effortReason.efforts.length; efi++) {
+            effortItems.push(effortReason.efforts[efi]);
+          }
+          for (var eii = 0; eii < effortItems.length; eii++) {
+            (function(effortItem) {
+              var isCurEffort = (effortItem.id === effortCurrent);
+              var effortLabel = (isCurEffort ? '● ' : '· ') + escapeHtml(effortItem.name || effortItem.id || '默认（供应商默认）');
+              var effortCls = 'tree-item' + (isCurEffort ? ' active-item' : '');
+              var effortNode = mkNode(effortLabel, effortCls, function() {
+                applyEffortChoice(effortModelVal, effortItem);
+              });
+              modelTree.appendChild(effortNode);
+              modelNodes.push({
+                el: effortNode,
+                kind: 'effort',
+                val: effortModelVal,
+                effort: effortItem.id,
+                text: (effortItem.name || effortItem.id || '默认（供应商默认）')
+              });
+            })(effortItems[eii]);
+          }
+        }
+      }
+
       if (kbModelIdx < 0) {
         var curSelIdx = modelSelect.selectedIndex;
         var activeModelIdx = -1;
@@ -7484,12 +7726,16 @@
 
     function activateModelNode(n) {
       if (!n) return;
-      if (n.kind === 'provider') {
+      if (n.kind === 'provider' || n.kind === 'effort-group') {
         n.el.onclick();
         return;
       }
       if (n.kind === 'model') {
         applyModelChoice(n);
+        return;
+      }
+      if (n.kind === 'effort') {
+        applyEffortChoice(n.val, { id: n.effort, name: n.text });
       }
     }
 
@@ -7754,6 +8000,11 @@
           }
         }
       }
+      // 思考强度随会话切换（契约 §1.6）：模型落到 selector 后同步该会话档位记忆，
+      // 无记忆则回落所选模型 defaultEffort（无 reasoning 恒为 ''）。
+      var sessEffortModelVal = '';
+      try { sessEffortModelVal = (modelSelect && modelSelect.value) || ''; } catch (eEffSel) {}
+      currentReasoningEffort = normalizeEffortForModel(sessEffortModelVal, sid ? getSessionEffortVal(sid) : '');
       saveActiveSession(cwd, sid);
       isNewChatBadgeActive = false;
       updateWsBadge();
@@ -10614,6 +10865,19 @@
           }
         }
       }
+      // reasoning 元数据全量重建（旧值清空，契约 §1.6）；当前模型命中目录 current 时
+      // 用 current.reasoningEffort 初始化组合器档位（此后由 stats 校真/用户选择收敛）。
+      rebuildModelReasoningMap(models);
+      try {
+        if (data.current && typeof data.current.reasoningEffort === 'string' && data.current.reasoningEffort) {
+          var bootCurVal = (data.current.provider || '') + ':::' + (data.current.model || '');
+          var bootSelVal = '';
+          try { bootSelVal = modelSelect.value || ''; } catch (eBootSel) {}
+          if (!bootSelVal || bootSelVal === bootCurVal) {
+            currentReasoningEffort = normalizeEffortForModel(bootSelVal, data.current.reasoningEffort);
+          }
+        }
+      } catch (eBootEffort) {}
 
       permSelect.innerHTML = '';
       var permissions = data.permissions || [];
@@ -11970,8 +12234,14 @@
       // 模型与会话绑定：本条消息的模型即该会话的模型记忆；新会话（无 sid）在推送
       // 落位后由下方 data.sessionId 分支补记。
       var sendModelVal = modelVal;
+      // 思考强度随发送透传（契约 §1.6）：仅非空时下发（缺省/'' 走供应商默认），
+      // 同时落地会话档位记忆（与模型记忆同一写入点）。
+      var sendEffortVal = getEffectiveReasoningEffort(modelVal);
       modelChoiceRevision++;
-      if (currentSessionId) recordSessionModel(currentSessionId, modelVal);
+      if (currentSessionId) {
+        recordSessionModel(currentSessionId, modelVal);
+        if (sendEffortVal) recordSessionEffort(currentSessionId, sendEffortVal);
+      }
 
       // 发送前置状态置位（时序优先）：在 appendMessage 本地回显前立即将状态机与流式标记置为 running，
       // 彻底消除 appendMessage 内部触发 renderSessionStatusTail 时的短暂 done 闪烁态。
@@ -12114,6 +12384,7 @@
         sessionId: currentSessionId,
         mode: (sendMode === 'steer') ? 'steer' : 'queue'
       };
+      if (sendEffortVal) payload.reasoningEffort = sendEffortVal;
       // Plus 挂载：ready 收据随首问发出；uploading/reading 拦截提示等就绪；error 作废不阻塞纯文本。
       // 图片内联（kind image）：content 直带 {type image, mediaType, data, name}，无需 sid。
       var plusAttachRid = '';
@@ -12201,6 +12472,7 @@
                     }
                     // 新会话在推送中落位：把本条消息的模型补记为该会话的模型记忆
                     if (sendModelVal) recordSessionModel(sendSid, sendModelVal);
+                    if (sendEffortVal) recordSessionEffort(sendSid, sendEffortVal);
                   }
                   if (eventType === 'start' && data.sessionId && data.model) {
                     recordSessionModel(data.sessionId, (data.provider || '') + ':::' + data.model);
@@ -13304,14 +13576,19 @@
           if (kbModelIdx >= 0 && kbModelIdx < modelNodes.length) {
             var targetDefNode = modelNodes[kbModelIdx];
             if (targetDefNode && targetDefNode.kind === 'model' && targetDefNode.val) {
+              var prevDefModelVal = '';
+              try { prevDefModelVal = modelSelect.value || ''; } catch (ePrevDef) {}
               saveDefaultModel(targetDefNode.val);
               modelSelect.selectedIndex = targetDefNode.idx;
+              // 思考强度随模型切换（契约 §1.6，与 applyModelChoice 同语义）
+              currentReasoningEffort = effortOnModelChange(prevDefModelVal, modelSelect.value || '');
               modelChoiceRevision++;
               if (!currentSessionId) {
                 latestSessionStats = null;
               }
               if (currentSessionId && modelSelect.value) {
                 recordSessionModel(currentSessionId, modelSelect.value, modelChoiceRevision);
+                recordSessionEffort(currentSessionId, currentReasoningEffort);
                 // 与 applyModelChoice 同语义：服务端确认前标记脏，防 stats 旧转录回滚
                 sessionModelDirty[currentSessionId] = true;
               }
