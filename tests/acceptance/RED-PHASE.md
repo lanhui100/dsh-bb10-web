@@ -184,3 +184,80 @@ Q20_ACCEPT_RUNNING_SID=<正在运行的会话 id> node tests/acceptance/run-all.
 2. `Q20_ACCEPT_RUNNING_SID=<真实运行中会话> node tests/acceptance/suite-host.mjs` → exit 0（真宿主一致；注意：**必须重启生产实例 3090 加载新代码**，否则仍打旧代码）。
 3. `node tests/acceptance/suite-browser.mjs` → exit 0，且 `artifacts/a9-c-panel.png` / `a9-u-panel.png` 落盘、Console Error = 0。
 4. `node tests/acceptance/run-all.mjs` → exit 0（若 A8 因窗口内无 running 会话而 SKIP，则 exit 3：核心门禁以 `suite-core.mjs` exit 0 为准，A8 需在自身回合运行中以 `Q20_ACCEPT_RUNNING_SID` 复跑）。
+
+---
+
+# 红相（Wave 2026-10-18）— 思考强度 reasoningEffort 选择 + 模型目录刷新
+
+- Owner: **test-agent**（独立验收方，L2-T）；契约唯一来源: [contract-wave-2026-10-18.md](.dev-team/contract-wave-2026-10-18.md)（§0 根因 / §1.1–§1.6 冻结接口 / §3 验收矩阵 A1–A8）
+- 红相落盘时间: **2026-10-18T12:02+08:00**（本机 `node v22.21.0`，chromium 真实通道）
+- 物理日志: [red-reasoning.log](tests/acceptance/artifacts/red-reasoning.log) · [red-runall-2026-10-18.log](tests/acceptance/artifacts/red-runall-2026-10-18.log)
+- 物理截图: [a7-effort-panel.png](tests/acceptance/artifacts/a7-effort-panel.png)（真实 chromium 720×720，面板**只有模型行、无「思考强度」分组** = 根因 R4 的用户可见面）
+- 交付件: 新增 `tests/acceptance/suite-reasoning.mjs`（冻结件）；`run-all.mjs` 的 `SUITES` 追加该套件（现 4 套件聚合）
+
+## 7.1 复现命令与退出码
+
+```bash
+cd <repo>
+node tests/acceptance/suite-reasoning.mjs   # exit 1
+node tests/acceptance/run-all.mjs           # exit 1（suites=4 failed=1 skipped=0）
+```
+
+| 运行 | 摘要 | 退出码 |
+|:--|:--|:--|
+| `suite-reasoning.mjs` | `SUITE-REASONING SUMMARY: total=8 pass=1 fail=7 degraded=0` | **1** |
+| `run-all.mjs` | `ACCEPTANCE-ALL SUMMARY: suites=4 failed=1 skipped=0 exit=1`（CORE/HOST/BROWSER 仍 exit 0，REASONING exit 1） | **1** |
+
+退出码语义与 `run-all` 完全一致：`0` 全绿 · `1` 有 FAIL（断言失败 / SEAM-MISSING / 执行异常）· `2` 套件启动失败 · `3` 无 FAIL 但存在显式 `[RED DEGRADED: 原因]`（真链路不可用，不计 PASS）。A7 环境不足时走 `skip()` → exit 3；本机 chromium 可用，故为真实 FAIL。
+
+## 7.2 逐条红相证据（期望 vs 实际）
+
+| ID | 断言要点 | 红相结论 | 真实失败摘要 |
+|:--|:--|:--|:--|
+| A1 | `bootstrap.models[]` 的 `glm-5.3-flash` 携 `reasoning.efforts` 3 项 + `defaultEffort=high`；`current.reasoningEffort` 非空 | ✖ FAIL（断言失败） | `reasoning` 缺失：**期望 `{efforts:[{id,name}…],defaultEffort:"high"}`；实际 `{"provider":"ponyllm","model":"glm-5.3-flash","name":"GLM-5.3-Flash","contextWindow":0}`**（根因 R2） |
+| A2 | 30s TTL 内两次普通 `/api/bootstrap` 的 `session/modelCatalog` 收据 ≤1；`?refresh=1` 收据 +1 | ✖ FAIL（断言失败） | `plain×2 = 1 次`（TTL 生效）后 `?refresh=1` 仍为 **1 次**：**期望 `2 次`；实际 `1 次`**（根因 R8 无强制刷新入口） |
+| A3 | 带 `reasoningEffort:'low'` → `selectModel` 收据 `args.reasoningEffort==='low'` 且 provider/model 正确；不带该键时 `args` 无该字段 | ✖ FAIL（**SEAM-MISSING**，§1.5.2 未实现） | 2 条 `session/selectModel` 收据均有 `method/at` 但**无 `args`**：`[{"method":"session/selectModel","at":…},{"method":"session/selectModel","at":…}]`；两个回合本身 status 200 + `done`，前置通过 |
+| A4 | `reasoningEffort:123` → 400 且文案含 `reasoningEffort`；>64 字符 → 400；`''` → 照常 200 流 | ✖ FAIL（断言失败） | **期望 `400`；实际 `200`**（非 string 被静默忽略并起流，§1.3 校验缺失） |
+| A5 | mock seed 回合带 `reasoningEffort:'low'` → `/api/session/stats` 返回 `'low'`；无 effort 会话 → `''` | ✖ FAIL（断言失败） | stats 200 但字段缺失：**期望 `low`；实际 `undefined`**（根因 R5；§1.5.3 转录 config 亦未落） |
+| A6 | `static/index.html` 全部内联 script 经 acorn `{ecmaVersion:5}` 解析 | ✔ PASS（**回归护栏**） | `ES5 PASS (1 个内联 script, acorn 7.4.1)` |
+| A7 | 真实浏览器：点模型徽标开面板出现「思考强度」分组/档位；点 `Low` 后徽标含 `·` 与 `Low`；面板收起；Console Error=0；截图落盘 | ✖ FAIL（断言失败） | 面板打开且模型行渲染正常，但 **`#model-tree` 无「思考强度」**：实际文本 `▼ ⭐ 常用 (0个模型) … ▼ ponyllm (3个模型) ● GLM-5.3-Flash · DeepSeek-V4-Flash · Kimi-K3 ▼ local (1个模型) · Mock Local 1`（根因 R4） |
+| A8 | 静态接线（AST 结构断言）：`openModel()` 发 `/api/bootstrap?refresh=1`；`/api/chat/stream` 发送函数（最内层 `doSend()`，27889B）载荷含 `reasoningEffort` | ✖ FAIL（断言失败） | `openModel 目录刷新=false；发送函数 reasoningEffort=false`（openModel 片段仅关闭各面板 + `renderModelTree()`；根因 R7 / R3 前端侧） |
+
+> **A6 说明（不得误读为「待修复」）**：ES5 门禁在实施前即为绿（现有 `static/index.html` 已是 ES5），它是防止 T-WEB 引入模板串、箭头函数、`let/const` 等现代语法的**回归护栏**：实施完成后必须保持 PASS，一旦转红即一票否决。
+
+## 7.3 mock 接缝状态（契约 §1.5 三点，实施前均缺失）
+
+| 接缝 | 契约要求 | 实施前实测 | 红相影响 |
+|:--|:--|:--|:--|
+| §1.5.1 `session/modelCatalog` mock | `glm-5.3-flash` 带 `reasoning.efforts[off,low,high]` + `defaultEffort:'high'`，`default.reasoningEffort:'high'` | 无 `reasoning`，`default` 仅 `{provider,model}` | A1 断言失败、A7 无档位可渲染 |
+| §1.5.2 `mockNoteRpc` | 收据行扩为 `{"method","at","args":<request>}` | 仅为 `{"method","at"}` | A3 判 **SEAM-MISSING**（收据无 `args`，无法断言透传内容；非「行为判负」） |
+| §1.5.3 `mockPersistTranscript` | header 行补 `config:{provider,model,reasoningEffort?}` + 追加 `request/header` 事件行 | header 无 `config`，无 `request/header` 事件 | A5 断言失败（stats 无 `reasoningEffort` 来源） |
+
+> `SeamMissingError` 与断言失败分列打印，但同样计入 `fail=` 并使退出码为 1 —— 接缝未实现同样是红相不通过，不放宽、不跳过。
+
+## 7.4 红相真实性核查（防假红）
+
+- **无语法/导入错误**：`node --check suite-reasoning.mjs` 通过；套件正常进入 8 条用例并输出机器摘要（非 exit 2）。
+- **无接口 500 当红相**：A1/A2/A3/A4/A5 全部为 HTTP 200（或断言点上的 400 期望）下的真实语义断言；A3 两回合 SSE 均 `start→delta→done`，说明前置链路健康，失败点唯一指向 `selectModel` 透传。
+- **接缝失败仍附行为证据**：A3 除 SEAM-MISSING 外，前置断言（2 条 `session/selectModel` 收据、状态码、终态）均已 PASS，可证明 `selectModel` 确实被调用、只是收据不带 `args`。
+- **A7 为真实链路**：真实 chromium（playwright 默认通道，720×720）驱动 `http://127.0.0.1:<mock>/`，点击 `#model-badge` 真实交互，面板真实渲染（截图见上），失败点为面板缺少思考强度分组。
+- **A8 为 AST 结构断言**：acorn 解析内联脚本后按「最内层函数」定位（`doSend()` 27889B / `openModel()` 677B），避免外层 IIFE 兜底命中造成空洞通过。
+- **隔离与零污染**：每条用例独立 mock 实例（`Q20_MOCK_HOST=1` + 临时 `DSH_HOME` + 临时工作区根），`cleanupTempDirs()` 全量回收；未触碰 `server.mjs` / `static/index.html`（只读），未 `git add/commit`。
+- **输出脱敏**：stdout / 日志 / 本文档不含绝对家目录路径（`redact()` 归一）；`grep -rnE '/hom[e]/[a-zA-Z0-9_.-]+/' tests/acceptance/artifacts/red-reasoning.log` → 空。
+
+## 7.5 冻结清单（sha256，Lead 复核后置只读）
+
+| 文件 | sha256 |
+|:--|:--|
+| `tests/acceptance/suite-reasoning.mjs` | `00d67f4ce22ea70637947365194f431040ac0ea66d00e446f081f847585e65b8` |
+| `tests/acceptance/run-all.mjs`（SUITES 追加） | `1ad71b64b8bd12ebf828a4308004ed5c58d1b755a02df897793fc3064cb2078f` |
+| `tests/acceptance/lib/harness.mjs`（未改动） | `b9d00ab7765918a65a9ef95015fc9495680572eb508768389636ec7519bf6e64` |
+| `tests/acceptance/suite-core.mjs`（未改动） | `ec70681892b2040bac89aef2fedc3ad9f2e1ff2878074e919835c974e43344d4` |
+| `tests/acceptance/suite-host.mjs`（未改动） | `0dcef74f2e8fb5b0b4d2e50b24355fcb9e245094ffea6737a3d679cd63535f54` |
+| `tests/acceptance/suite-browser.mjs`（未改动） | `9b0c73e3b9925c596f1109dc57e925d4bac9c60b0a0bb22240a3760d0216476f` |
+
+## 7.6 本波绿相判据（T-SRV / T-WEB 完成后由 Lead 复核）
+
+1. `node tests/acceptance/suite-reasoning.mjs` → **exit 0**：A1–A5、A7、A8 全绿，A6 保持 PASS。
+2. `node tests/acceptance/run-all.mjs` → **exit 0**（4 套件全绿；HOST 若因窗口内无 running 会话 SKIP 则为 exit 3，以 `suite-reasoning.mjs` exit 0 为准）。
+3. A7 绿相要求 `artifacts/a7-effort-panel.png` 中可见「⚙ 思考强度」分组（含 `Off/Low/High`，当前项 `●`）且 `a7-effort-badge.png` 徽标含 `· Low`，Console Error = 0。

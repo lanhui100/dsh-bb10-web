@@ -1,0 +1,65 @@
+# RED PHASE — Wave 2026-10-18 (A1–A8) 物理收据
+# 生成时间: 2026-10-18T12:02:37+08:00
+# owner: test-agent (L2-T)
+# 契约: .dev-team/contract-wave-2026-10-18.md §3 验收矩阵 A1–A8
+# 命令: cd <repo> && node tests/acceptance/suite-reasoning.mjs
+# 说明: A1–A5、A7、A8 必须真实失败（断言失败 / RPC 收据断言），A6 为回归护栏必须 PASS；禁止语法/导入错误与 500 崩溃当红相。
+---
+(node:3239976) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+# Q20 验收套件 REASONING (A1–A8) — 契约 .dev-team/contract-wave-2026-10-18.md
+# 时间: 2026-10-18T04:02:37.452Z
+▶ [REASONING] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空
+  ✖ FAIL [491.47ms] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空
+      断言失败: A1 glm-5.3-flash 必须携带 reasoning 元数据（契约 §1.1；根因 R2 当前整体丢弃） → 期望: { efforts:[{id,name}...], defaultEffort:"high" }；实际: {"provider":"ponyllm","model":"glm-5.3-flash","name":"GLM-5.3-Flash","contextWindow":0}
+▶ [REASONING] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1
+  ✖ FAIL [329.32ms] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1
+      断言失败: A2 refresh=1 必须绕过 30s MODEL_CATALOG_TTL_MS 并额外产生 1 次 session/modelCatalog 收据（契约 §1.2；根因 R8） → 期望: 2 次；实际: 1 次
+▶ [REASONING] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort
+  ✖ FAIL [337.36ms] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort
+      SEAM-MISSING: SEAM-MISSING（契约 §1.4 未实现）: A3 mock RPC 收据必须携带 args（契约 §1.5.2 收据行 {"method","at","args":<request>}） → 期望: 每条 session/selectModel 收据含 args 对象；实际: [{"method":"session/selectModel","at":1792296158449},{"method":"session/selectModel","at":1792296158457}]
+▶ [REASONING] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流
+  ✖ FAIL [329.71ms] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流
+      断言失败: A4 非 string 的 reasoningEffort 必须 400（SSE 头之前拦截，契约 §1.3） → 期望: 400；实际: 200
+▶ [REASONING] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → ""
+  ✖ FAIL [335.54ms] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → ""
+      断言失败: A5 stats.reasoningEffort 必须来自转录 request/header.config.reasoningEffort（契约 §1.4；根因 R5） → 期望: low；实际: undefined
+▶ [REASONING] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5}
+  ✔ PASS [92.56ms] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5} — ES5 PASS (1 个内联 script, acorn 7.4.1)
+▶ [REASONING] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图
+  (chromium: playwright default)
+  ✖ FAIL [16210.94ms] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图
+      断言失败: A7 模型面板必须渲染「思考强度」分组（契约 §1.6；根因 R4 面板只有模型行） → 期望: #model-tree 文本含「思考强度」；实际: #model-tree 文本="▼ ⭐ 常用 (0个模型)\n◇ 暂无常用模型，选中后按 F 收藏\n▼ ponyllm (3个模型)\n● GLM-5.3-Flash\n· DeepSeek-V4-Flash\n· Kimi-K3\n▼ local (1个模型)\n· Mock Local 1"
+▶ [REASONING] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort
+  ✖ FAIL [67.6ms] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort
+      断言失败: A8 静态接线（契约 §1.6）：openModel 必须触发 /api/bootstrap?refresh=1（修 R7），且 /api/chat/stream 发送函数载荷必须含 reasoningEffort（修 R3 前端侧） → 期望: openModel 含 /api/bootstrap 且 refresh=1；发送函数含 reasoningEffort；实际: openModel 目录刷新=false；发送函数 reasoningEffort=false（openModel 片段: function openModel() {
+      if (isQuickMsgOpen) closeQuickMsg();
+      if (isWsOpen) closeWs();
+      if (isSessOpen) closeSess();
+      if (isSubagentOpen) closeSubagent(true);
+      if (isPermOpen)…）
+
+──────── REASONING 报告 ────────
+✖ FAIL [491.47ms] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空
+        A1 glm-5.3-flash 必须携带 reasoning 元数据（契约 §1.1；根因 R2 当前整体丢弃） → 期望: { efforts:[{id,name}...], defaultEffort:"high" }；实际: {"provider":"ponyllm","model":"glm-5.3-flash","name":"GLM-5.3-Flash","contextWindow":0}
+✖ FAIL [329.32ms] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1
+        A2 refresh=1 必须绕过 30s MODEL_CATALOG_TTL_MS 并额外产生 1 次 session/modelCatalog 收据（契约 §1.2；根因 R8） → 期望: 2 次；实际: 1 次
+✖ FAIL [337.36ms] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort
+        SEAM-MISSING（契约 §1.4 未实现）: A3 mock RPC 收据必须携带 args（契约 §1.5.2 收据行 {"method","at","args":<request>}） → 期望: 每条 session/selectModel 收据含 args 对象；实际: [{"method":"session/selectModel","at":1792296158449},{"method":"session/selectModel","at":1792296158457}]
+✖ FAIL [329.71ms] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流
+        A4 非 string 的 reasoningEffort 必须 400（SSE 头之前拦截，契约 §1.3） → 期望: 400；实际: 200
+✖ FAIL [335.54ms] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → ""
+        A5 stats.reasoningEffort 必须来自转录 request/header.config.reasoningEffort（契约 §1.4；根因 R5） → 期望: low；实际: undefined
+✔ PASS [92.56ms] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5}
+✖ FAIL [16210.94ms] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图
+        A7 模型面板必须渲染「思考强度」分组（契约 §1.6；根因 R4 面板只有模型行） → 期望: #model-tree 文本含「思考强度」；实际: #model-tree 文本="▼ ⭐ 常用 (0个模型)\n◇ 暂无常用模型，选中后按 F 收藏\n▼ ponyllm (3个模型)\n● GLM-5.3-Flash\n· DeepSeek-V4-Flash\n· Kimi-K3\n▼ local (1个模型)\n· Mock Local 1"
+✖ FAIL [67.6ms] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort
+        A8 静态接线（契约 §1.6）：openModel 必须触发 /api/bootstrap?refresh=1（修 R7），且 /api/chat/stream 发送函数载荷必须含 reasoningEffort（修 R3 前端侧） → 期望: openModel 含 /api/bootstrap 且 refresh=1；发送函数含 reasoningEffort；实际: openModel 目录刷新=false；发送函数 reasoningEffort=false（openModel 片段: function openModel() {
+      if (isQuickMsgOpen) closeQuickMsg();
+      if (isWsOpen) closeWs();
+      if (isSessOpen) closeSess();
+      if (isSubagentOpen) closeSubagent(true);
+      if (isPermOpen)…）
+合计: 8 用例, PASS 1, FAIL 7, SKIP(degraded) 0
+SUITE-REASONING SUMMARY: total=8 pass=1 fail=7 degraded=0
+EXIT=1

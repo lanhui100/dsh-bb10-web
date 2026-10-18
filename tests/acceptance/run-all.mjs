@@ -1,11 +1,12 @@
 /**
- * Q20 Wave 2026-10-16 验收总入口：顺序执行三个套件并聚合退出码。
+ * Q20 验收总入口：顺序执行全部套件并聚合退出码。
  * Owner: test-agent（冻结件，Executor 只读）
  *
  *   node tests/acceptance/run-all.mjs
- *     → CORE   (A1–A7, A10)  契约 §3 主门禁
- *     → HOST   (A8 真宿主)   环境不具备时显式 SKIP（[RED DEGRADED: ...]）
- *     → BROWSER(A9 真实页面) 环境不具备时显式 SKIP（[RED DEGRADED: ...]）
+ *     → CORE    (2026-10-16 A1–A7, A10)  契约 §3 主门禁
+ *     → HOST    (2026-10-16 A8 真宿主)   环境不具备时显式 SKIP（[RED DEGRADED: ...]）
+ *     → BROWSER (2026-10-16 A9 真实页面) 环境不具备时显式 SKIP（[RED DEGRADED: ...]）
+ *     → REASONING (2026-10-18 A1–A8 思考强度 + 目录刷新) 契约 .dev-team/contract-wave-2026-10-18.md
  *
  * 退出码语义（绝不伪装成绿）：
  *   0 = 全部 PASS
@@ -19,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SUITES = ['suite-core.mjs', 'suite-host.mjs', 'suite-browser.mjs'];
+const SUITES = ['suite-core.mjs', 'suite-host.mjs', 'suite-browser.mjs', 'suite-reasoning.mjs'];
 
 function runSuite(file) {
   return new Promise((resolve) => {
