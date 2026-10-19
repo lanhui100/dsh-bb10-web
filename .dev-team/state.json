@@ -229,7 +229,7 @@
    "red_commit": "6a39e48",
    "red_tag": "wave-2026-10-19-red",
    "contract": ".dev-team/contract-wave-2026-10-19.md",
-   "status": "in_progress",
+   "status": "completed",
    "quarantine": null,
    "nfr_degraded": [],
    "write_scopes": {
@@ -259,6 +259,27 @@
    "counters": {
     "L2T_fail": 0,
     "L2AT_fail": 0
+   },
+   "green_commit": "1f81872",
+   "closed_at": "2026-10-19T11:45:00+08:00",
+   "gates": {
+    "decoupling": 0,
+    "acceptance": "6 suites / statusqueue-core 4 + statusqueue-browser 7 PASS",
+    "unit": "35/35",
+    "es5": "PASS",
+    "server_check": 0,
+    "stub_lint": "0(via .js mirror + acorn AST)"
+   },
+   "l3_reviews": {
+    "l3a": "FAIL 5 findings -> fixed",
+    "l3a2": "FAIL 4 findings -> fixed",
+    "l3b": "PASS"
+   },
+   "deploy": {
+    "method": "sudo systemctl restart dsh-q20-web",
+    "healthz": 0,
+    "live_sessions": "running 行 state=running 无 pendingInteraction",
+    "live_browser": "720x720 console errors=0"
    }
   }
  ]
