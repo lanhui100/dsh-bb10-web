@@ -1210,7 +1210,8 @@ async function main() {
         throw new Error('Error with cancellation message must not produce error banner notification');
       }
 
-      // 6d. 若当前正处于该会话的消息流主界面，无需发出横幅通知
+      // 6d. 当前正处于该会话详情界面时，一律不发状态横幅（含浮层覆盖场景）：
+      // 用户已在该对话详情界面，横幅的"点击进入该会话"动作冗余。
       scope.currentSessionId = 'sess-current-active';
       scope.isWsOpen = false;
       scope.isSessOpen = false;
@@ -1218,14 +1219,25 @@ async function main() {
       if (bannerLogic.getNotifications().some((n) => n.id === 'sess-current-active')) {
         throw new Error('Session currently viewed in message stream should not produce banner notification');
       }
-      // 但若此时弹窗覆盖（例如用户打开了工作区或会话选择等），则应正常发出通知
+      // 浮层（会话面板/工作区面板等）覆盖时同样不发：用户仍在详情界面
       scope.isSessOpen = true;
       bannerLogic.notifySessionComplete('/test/ws', 'sess-current-active', 'done', '', '弹窗覆盖中的当前会话');
-      if (!bannerLogic.getNotifications().some((n) => n.id === 'sess-current-active')) {
-        throw new Error('Session with overlay open should still trigger notification');
+      if (bannerLogic.getNotifications().some((n) => n.id === 'sess-current-active')) {
+        throw new Error('Session detail view with overlay open must not produce done banner notification');
       }
+      scope.isWsOpen = true;
+      bannerLogic.notifySessionComplete('/test/ws', 'sess-current-active', 'error', '浮层覆盖中的错误', '弹窗覆盖中的当前会话错误');
+      if (bannerLogic.getNotifications().some((n) => n.id === 'sess-current-active')) {
+        throw new Error('Session detail view with overlay open must not produce error banner notification');
+      }
+      scope.isWsOpen = false;
       scope.isSessOpen = false;
       scope.currentSessionId = '';
+      // 反向断言（防过度抑制）：离开该会话详情后，同一会话的终态仍应正常发横幅
+      bannerLogic.notifySessionComplete('/test/ws', 'sess-current-active', 'done', '', '离开详情后的会话');
+      if (!bannerLogic.getNotifications().some((n) => n.id === 'sess-current-active')) {
+        throw new Error('Suppression must not leak: session completion outside detail view must still notify');
+      }
 
       // 7. 状态机对比检查：冷启动不触发，后续由 running 迁移至 done/error 时触发
       bannerLogic.getNotifications().length = 0; // reset
