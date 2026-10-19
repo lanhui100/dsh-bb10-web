@@ -3957,21 +3957,10 @@
       if (!sid) return;
       if (state !== 'done' && state !== 'error') return;
 
-      // 如果当前正在该会话的消息流主界面中，且没有打开全屏弹窗覆盖层，则用户已在此界面直面生成终态，无需发出横幅通知
+      // 当前已处于该会话详情界面（含工作区/会话面板等浮层覆盖）：
+      // 用户直面该会话终态，"点击横幅进入会话"的动作冗余，一律不发状态横幅。
       if (typeof currentSessionId !== 'undefined' && sid === currentSessionId) {
-        var isAnyOverlayOpen = (
-          (typeof isWsOpen !== 'undefined' && isWsOpen) ||
-          (typeof isSessOpen !== 'undefined' && isSessOpen) ||
-          (typeof isSubagentOpen !== 'undefined' && isSubagentOpen) ||
-          (typeof isModelOpen !== 'undefined' && isModelOpen) ||
-          (typeof isPermOpen !== 'undefined' && isPermOpen) ||
-          (typeof isHelpOpen !== 'undefined' && isHelpOpen) ||
-          (typeof isStatusOpen !== 'undefined' && isStatusOpen) ||
-          (typeof questionState !== 'undefined' && questionState && questionState.visible)
-        );
-        if (!isAnyOverlayOpen) {
-          return;
-        }
+        return;
       }
 
       // 用户主动停止的会话，绝不当作错误横幅通知

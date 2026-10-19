@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded by: [2026-10-19-banner-suppress-in-session-detail](2026-10-19-banner-suppress-in-session-detail.md)（仅"浮层覆盖时仍通知"条款；摘要反向提取与完成前缀修正条款仍有效）
+
 ## Problem
 
 在黑莓 Q20 小屏环境下，会话完成或异常时顶部横幅通知偶发出现用户消息内容提取不准确，以及在某些全屏面板打开时判定不全导致通知触发异常：
