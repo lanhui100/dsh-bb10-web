@@ -1,0 +1,52 @@
+# T1 receipt — lib/session-waiting.mjs 空桩冻结 (2026-10-19T08:36:50+08:00)
+
+$ node --check lib/session-waiting.mjs
+(node:3257996) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+EXIT=0
+
+$ python3 ~/.agents/skills/dev-team/scripts/dev-stub-lint.py lib/session-waiting.mjs
+[PASS] dev-stub-lint 校验通过 (共检查 1 个文件)
+EXIT=0
+
+# NOTE: .mjs 后缀不在 dev-stub-lint 分派表 (.py/.ts/.js) 内 => 上面 PASS 为真空（0 规则执行）。盲区实证：
+[PASS] dev-stub-lint 校验通过 (共检查 1 个文件)
+mjs盲区 EXIT=0
+[FAIL] dev-stub-lint 发现 1 处纯度违规:
+  - /tmp/t1-blind.js:2: 空桩文件中禁止包含循环或分支控制流: `while (x) { x--; }`
+js对照 EXIT=1
+
+$ python3 .../dev-stub-lint.py <同内容 .js 副本>（真实启发式路径）
+[PASS] dev-stub-lint 校验通过 (共检查 1 个文件)
+EXIT=0
+
+$ node /tmp/purity-check.mjs  (acorn AST 纯度门禁)
+{
+  "exports": [
+    "normalizeUserText",
+    "eventUserText",
+    "normalizeEventText",
+    "hasPendingQuestionFromEvents"
+  ],
+  "totalLines": 56,
+  "codeLines": 12,
+  "violations": []
+}
+EXIT=0
+
+$ node /tmp/stub-runtime.mjs  (导出签名 + NotImplemented 行为)
+exports=["eventUserText","hasPendingQuestionFromEvents","normalizeEventText","normalizeUserText"]
+behaviour=["eventUserText:THROW_OK","hasPendingQuestionFromEvents:THROW_OK","normalizeEventText:THROW_OK","normalizeUserText:THROW_OK"]
+STUB CONTRACT PASS
+EXIT=0
+
+$ python3 .../dev-nfr-lint.py .dev-team/nfr-baseline.json
+[FAIL] dev-nfr-lint 发现违规:
+  - .dev-team/nfr-baseline.json: logging.format 必须为 'json'，实得 'text-prefix'
+  - .dev-team/nfr-baseline.json: logging 必须声明 trace_id 规范 (如 trace_id=true 或命名规范)
+EXIT=1
+# 预存缺陷实证（HEAD 基线同源跑，排除本次变更因果）：
+[FAIL] dev-nfr-lint 发现违规:
+  - /tmp/t1-nfr-head.json: logging.format 必须为 'json'，实得 'text-prefix'
+  - /tmp/t1-nfr-head.json: logging 必须声明 trace_id 规范 (如 trace_id=true 或命名规范)
+HEAD EXIT=1

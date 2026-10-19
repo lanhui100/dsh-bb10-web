@@ -1,0 +1,29 @@
+(node:3330132) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+# Q20 验收套件 STATUSQUEUE-CORE (A1–A4) — 契约 .dev-team/contract-wave-2026-10-19.md
+# 时间: 2026-10-19T00:49:08.429Z
+▶ [STATUSQUEUE-CORE] A1 纯函数：未结算 ask_user_question → true；同 callId 结算 → false；无提问 → false；JSON 字符串行亦支持
+  ✖ FAIL [0.28ms] A1 纯函数：未结算 ask_user_question → true；同 callId 结算 → false；无提问 → false；JSON 字符串行亦支持
+      断言失败: A1 未结算提问 调用抛异常 → 期望: 返回 boolean（C-2 纯函数，零副作用）；实际: NotImplemented
+▶ [STATUSQUEUE-CORE] A2 mock：含未结算 ask_user_question 的会话行 state=waiting && pendingInteraction=question && isRunning=true
+  ✖ FAIL [357.69ms] A2 mock：含未结算 ask_user_question 的会话行 state=waiting && pendingInteraction=question && isRunning=true
+      断言失败: A2 行 pendingInteraction → 期望: question；实际: undefined
+▶ [STATUSQUEUE-CORE] A3 mock：同 callId tool/result 结算后不残留 waiting（running 时回到 state=running）
+  ✖ FAIL [488.94ms] A3 mock：同 callId tool/result 结算后不残留 waiting（running 时回到 state=running）
+      断言失败: A3 结算前必须先进入 waiting（前置条件，防空洞断言） → 期望: waiting；实际: running
+▶ [STATUSQUEUE-CORE] A4 mock：/api/sessions/status?ids= 对等待作答会话返回 state=waiting（与 A2 同口径）
+  ✖ FAIL [490.04ms] A4 mock：/api/sessions/status?ids= 对等待作答会话返回 state=waiting（与 A2 同口径）
+      断言失败: A4 前置：/api/sessions 行必须为 waiting（单点口径） → 期望: waiting；实际: running
+
+──────── STATUSQUEUE-CORE 报告 ────────
+✖ FAIL [0.28ms] A1 纯函数：未结算 ask_user_question → true；同 callId 结算 → false；无提问 → false；JSON 字符串行亦支持
+        A1 未结算提问 调用抛异常 → 期望: 返回 boolean（C-2 纯函数，零副作用）；实际: NotImplemented
+✖ FAIL [357.69ms] A2 mock：含未结算 ask_user_question 的会话行 state=waiting && pendingInteraction=question && isRunning=true
+        A2 行 pendingInteraction → 期望: question；实际: undefined
+✖ FAIL [488.94ms] A3 mock：同 callId tool/result 结算后不残留 waiting（running 时回到 state=running）
+        A3 结算前必须先进入 waiting（前置条件，防空洞断言） → 期望: waiting；实际: running
+✖ FAIL [490.04ms] A4 mock：/api/sessions/status?ids= 对等待作答会话返回 state=waiting（与 A2 同口径）
+        A4 前置：/api/sessions 行必须为 waiting（单点口径） → 期望: waiting；实际: running
+合计: 4 用例, PASS 0, FAIL 4, SKIP(degraded) 0
+SUITE-STATUSQUEUE-CORE SUMMARY: total=4 pass=0 fail=4 degraded=0
+EXIT_CODE=1

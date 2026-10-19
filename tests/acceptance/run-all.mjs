@@ -20,7 +20,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SUITES = ['suite-core.mjs', 'suite-host.mjs', 'suite-browser.mjs', 'suite-reasoning.mjs'];
+// 2026-10-19 Wave STATUSQUEUE-CORE (A1–A4) 契约 .dev-team/contract-wave-2026-10-19.md §3
+// 2026-10-19 Wave STATUSQUEUE-BROWSER (A5–A7 真实页面) 同一契约 §3
+const SUITES = ['suite-core.mjs', 'suite-host.mjs', 'suite-browser.mjs', 'suite-reasoning.mjs', 'suite-statusqueue-core.mjs', 'suite-statusqueue-browser.mjs'];
 
 function runSuite(file) {
   return new Promise((resolve) => {
