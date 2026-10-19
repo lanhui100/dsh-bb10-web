@@ -3149,6 +3149,8 @@
     function normalizeSessionState(s) {
       var st = (s && s.state) || '';
       if (st === 'waiting' || st === 'pendingInteraction') return 'waiting';
+      // 对齐 dsh：running 与 pendingInteraction 正交，等待作答优先级高于普通 running
+      if (s && s.pendingInteraction) return 'waiting';
       if (s && s.isRunning) return 'running';
       if (st === 'error') return 'error';
       if (st === 'stopped') return 'stopped';
@@ -3189,6 +3191,11 @@
           if (list[i] && list[i].id === sid) {
             list[i].isRunning = isRun;
             list[i].state = phase;
+            // waiting 结束后必须清除服务端快照残留的 pendingInteraction，
+            // 否则该行会继续被 normalizeSessionState 判为 waiting（≤15s 误显示停止键）。
+            if (phase !== 'waiting') {
+              try { delete list[i].pendingInteraction; } catch (ePI) {}
+            }
             found = true;
             break;
           }
@@ -5225,6 +5232,7 @@
     var isHelpOpen = false;
     var currentSessionId = '';
     var allMessages = []; // 消息缓冲（原先为隐式全局，显式声明以消除初始化前读取的 ReferenceError 风险）
+    var allMessagesSid = ''; // allMessages 所属会话 id（排队槽「已被历史接管」判定先验归属，跨会话文本绝不参与比对）
     var isStreaming = false;
     var activeXhr = null;
     var lastUserPrompt = '';
@@ -5867,6 +5875,7 @@
                 sessState.running = false;
                 sessState.phase = 'idle';
                 allMessages = [];
+                allMessagesSid = '';
                 chatContainer.innerHTML = '';
                 updateWelcomePlaceholder();
                 if (typeof clearGoalRing === 'function') clearGoalRing();
@@ -7883,6 +7892,7 @@
       liveReplayUntil = 0;
       renderSendButton();
       allMessages = [];
+      allMessagesSid = '';
       visibleCount = 20;
       chatContainer.innerHTML = '';
       hideWelcomeError();
@@ -7900,7 +7910,9 @@
 
     function selectWorkspace(cwd) {
       sessionSeqToken++;
-      clearQueueDock(); // 换工作区：旧排队/插队槽失效
+      // 仅真正切换工作区才作废旧排队/插队槽；同工作区重入（W 面板换会话的常规导航路径）
+      // 不得丢弃会话级排队槽——排队槽属于会话而不属于工作区（A9 回归点）。
+      if (cwd !== getCwd()) clearQueueDock();
       if (typeof plusClear === 'function') { try { plusClear(true); } catch (ePCW) {} } // 旧收据归属旧会话，切走即废
       if (activeXhr) {
         try { activeXhr.__aborted = true; activeXhr.abort(); } catch (e) {}
@@ -7931,6 +7943,7 @@
       }
       saveActiveSession(cwd, '');
       allMessages = [];
+      allMessagesSid = '';
       visibleCount = 20;
       chatContainer.innerHTML = '';
       isNewChatBadgeActive = false;
@@ -8022,6 +8035,7 @@
         sessState.promptError = '';
         renderSendButton();
         allMessages = [];
+        allMessagesSid = '';
         visibleCount = 20;
         chatContainer.innerHTML = '';
         updateWelcomePlaceholder();
@@ -8062,13 +8076,18 @@
           }
         } catch (eSlot) {}
         // 切回带排队消息的会话：分槽有排队且会话处于运行中则恢复底部排队条
+        // 运行态判定以服务端会话快照（isCachedSessionRunning）兜底，避免本地临时 sessState
+        // 残余把仍运行中会话的排队槽误清（A9 回归点：宿主未认领时槽必须保留）。
         try {
-          if (sessState.running && queuedPromptStore[sid]) {
+          var switchRun = !!(sessState.running || isCachedSessionRunning(sid));
+          if (queuedPromptStore[sid] && switchRun) {
             restoreQueuedPrompt(sid);
-          } else if (!sessState.running) {
+          } else if (!switchRun) {
             clearQueueDock(sid);
           }
         } catch (eQSlot) {}
+        // 兜底轮询随会话切换重新对齐（无槽/非运行立即停表，绝不常驻轮询其它会话）
+        try { ensureQueueClaimPoll(); } catch (eQPoll) {}
         loadHistory(cwd, sid, function(err, msgs) {
           if (currentSessionId === sid) {
             // 对齐 dsh web：如果从历史加载出来的最后一个消息中的工具没有 running，
@@ -11088,10 +11107,16 @@
       if (st.isRunning) {
         row.isRunning = true;
         row.state = (st.state === 'waiting') ? 'waiting' : 'running';
+        // 轻量状态补丁是 waiting 的清除方：非 waiting 的补丁必须抹掉残留 pendingInteraction，
+        // 否则 normalizeSessionState 的 pendingInteraction 优先级会让该行永久判 waiting。
+        if (st.state !== 'waiting') {
+          try { delete row.pendingInteraction; } catch (ePI1) {}
+        }
         return 'up';
       }
       var wasRunning = !!row.isRunning;
       row.isRunning = false;
+      try { delete row.pendingInteraction; } catch (ePI2) {}
       if (row.state === 'running' || row.state === 'waiting' || !row.state) row.state = 'idle';
       return wasRunning ? 'down' : 'keep';
     }
@@ -11456,6 +11481,7 @@
                       }
                       if (syncSig !== curSig) {
                         allMessages = data.messages;
+                        allMessagesSid = sid;
                         if (!syncIsRunning) {
                           clearQueueDock(sid);
                         } else if (queuedPromptStore[sid]) {
@@ -11599,6 +11625,11 @@
                     }
                     ensureSessionStatusTail();
                     scrollBottom();
+                  } else if (currentEvent === 'prompt-claimed') {
+                    // 上游认领排队消息（§C-1 认领即清槽）：仅清匹配的排队槽，
+                    // 绝不 append 用户气泡（正式渲染由历史同步负责，严禁重复）。
+                    // 回放门控：仅 replay_end 之后的实时帧才可清槽，重连回放的旧帧一律忽略。
+                    if (replayDone) clearQueueDockIfClaimed(sid, (data && data.text) || '');
                   } else if (currentEvent === 'steer' && data.text) {
                     // 插队消息入流：清空底部停靠槽并就地封口当前 step
                     clearQueueDock(sid);
@@ -11837,6 +11868,7 @@
       isLoadingMoreHistory = false;
       if (!silent) {
         allMessages = [];
+        allMessagesSid = id;
         visibleCount = 20;
         turnFillExhausted = false; // 全新加载会话后重新允许轮次对齐补齐
         historyTotal = 0;
@@ -11885,7 +11917,10 @@
                 }
               } else {
                 allMessages = msgs;
-                if (!sessState.running) {
+                allMessagesSid = id;
+                // 运行态以服务端会话快照兜底：仅当本地与服务端快照都非运行中才收槽，
+                // 否则恢复排队条（宿主未认领时槽必须保留）。
+                if (!sessState.running && !isCachedSessionRunning(id)) {
                   clearQueueDock(id);
                 } else if (queuedPromptStore[id]) {
                   restoreQueuedPrompt(id);
@@ -11901,9 +11936,12 @@
               if (lastMsg && lastMsg.role === 'error') {
                 sessState.lastError = lastMsg.text || '模型生成出错';
                 syncSessionPhase(id, 'error', '✖ ' + (lastMsg.code ? dshErrLabel(lastMsg.code) : '模型生成出错'));
-              } else if (!sessState.running || !lastToolIsRunning) {
+              } else if ((!sessState.running || !lastToolIsRunning) && !queuedPromptStore[id] && !isCachedSessionRunning(id)) {
                 // 历史加载完成：除非确有在途推流，否则收口为完成态/空闲态，
                 // 彻底消灭历史会话进入后的“调用工具中”假阳性！
+                // 例外①：该会话仍有排队槽时不得降级（排队 ⇒ 未收口）；
+                // 例外②：会话列表快照（服务端真源）仍标运行中时不得降级——否则本地历史加载会
+                // 伪造终态，进而让切回/静默轮询误清排队槽（A9 回归点）。
                 var countDesc = historyTotalTurns > 0
                   ? ('共 ' + historyTotalTurns + ' 轮')
                   : (historyTotal > 0 ? (allMessages.length + '/' + historyTotal + '条') : (allMessages.length + '条'));
@@ -12002,6 +12040,7 @@
               if (earlierMsgs.length > 0) {
                 // Prepend earlier messages
                 allMessages = earlierMsgs.concat(allMessages);
+                allMessagesSid = id;
                 renderWindowedMessages(true);
                 var countDesc = historyTotalTurns > 0
                   ? ('共 ' + historyTotalTurns + ' 轮')
@@ -12258,6 +12297,8 @@
       // 本地回显同步带附件卡片：图片用已读 base64 直接缩略，文件用宿主回传的
       // 附件 id 预览；历史重载后由 /api/history 的同口径 attachments 接管。
       appendMessage('user', prompt, fpLocalEchoAttachments());
+      // 回显归属（R2a）：本地回显即属当前会话，避免随后追发把排队基线误记为「未知/0」。
+      if (currentSessionId) allMessagesSid = currentSessionId;
       userScrolledUp = false;
       inputBox.value = '';
 
@@ -12470,6 +12511,9 @@
                       currentSessionId = data.sessionId;
                       saveActiveSession(wsSelect.value, currentSessionId);
                     }
+                    // 缓冲区归属回写（R2a）：新会话首轮此前 allMessagesSid 为空，
+                    // 服务端下发 sessionId 后即认领该缓冲区，避免追发基线退化为「未知」。
+                    if (!allMessagesSid) allMessagesSid = data.sessionId;
                     // 新会话在推送中落位：把本条消息的模型补记为该会话的模型记忆
                     if (sendModelVal) recordSessionModel(sendSid, sendModelVal);
                     if (sendEffortVal) recordSessionEffort(sendSid, sendEffortVal);
@@ -12587,6 +12631,10 @@
                     }
                     ensureSessionStatusTail();
                     scrollBottom();
+                  } else if (eventType === 'prompt-claimed') {
+                    // 上游认领排队消息（§C-1 认领即清槽）：仅清匹配的排队槽，绝不 append 气泡。
+                    // 会话归属必须确定（sendSid 为空时直接跳过，绝不用 currentSessionId 兜底清错会话）。
+                    if (sendSid) clearQueueDockIfClaimed(sendSid, (data && data.text) || '');
                   } else if (eventType === 'steer' && data.text) {
                     // 插队消息入流：清空底部停靠槽并就地封口当前 step
                     clearQueueDock(sendSid || currentSessionId);
@@ -12786,6 +12834,196 @@
     var queuedPromptStore = {}; // 多会话分槽存储：sid -> { sid, prompt, itemId, mode }
     var isRevokingQueued = false; // 防重锁：防止快速双击 Z 或按钮发出重复撤回请求
 
+    // 归一化排队文本（契约 §C-1 归一化规则）：空白折叠为单空格 + trim。
+    function normalizeQueuedText(text) {
+      if (typeof text !== 'string' || !text) return '';
+      return text.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    }
+
+    // 槽内 prompt 与上游已认领文本匹配：归一化相等，或 claimed 以 queued 为前缀
+    //（上传附带的系统提示文本落在末尾，故取用户原文前缀匹配）。
+    // 任一侧归一化后为空（畸形/空文本）一律不匹配，杜绝空串成为万向前缀误清槽。
+    function queuePromptMatches(queued, claimed) {
+      var q = normalizeQueuedText(queued);
+      var c = normalizeQueuedText(claimed);
+      if (!q || !c) return false;
+      if (q === c) return true;
+      return c.indexOf(q) === 0;
+    }
+
+    // 认领即清槽（§C-1）：仅当该会话确有排队槽且文本匹配时清，不追加任何气泡。
+    function clearQueueDockIfClaimed(sid, text) {
+      var targetSid = sid || currentSessionId;
+      if (!targetSid) return;
+      var slot = queuedPromptStore[targetSid];
+      if (!slot) return;
+      if (!queuePromptMatches(slot.prompt, text)) return;
+      clearQueueDock(targetSid);
+    }
+
+    // 当前 allMessages 中 user 消息条数（排队槽基线计数用；仅语义上要求同会话）。
+    function countUserMessagesInBuf() {
+      if (!allMessages || !allMessages.length) return 0;
+      var cnt = 0;
+      for (var ci = 0; ci < allMessages.length; ci++) {
+        if (allMessages[ci] && allMessages[ci].role === 'user' && allMessages[ci].text) cnt += 1;
+      }
+      return cnt;
+    }
+
+    // 会话列表快照（/api/sessions 服务端真源）中该会话是否标记运行中。
+    // 切回/恢复/历史加载的排队槽处置必须以该权威快照为准，不得被本地临时的 sessState 残余误导。
+    function isCachedSessionRunning(sid) {
+      if (!sid) return false;
+      var cwd = getCwd();
+      if (!cwd || typeof sessCache === 'undefined' || !sessCache[cwd]) return false;
+      var list = sessCache[cwd];
+      if (!list || !list.length) return false;
+      for (var ri = 0; ri < list.length; ri++) {
+        if (list[ri] && list[ri].id === sid) return !!list[ri].isRunning;
+      }
+      return false;
+    }
+
+    // 当前 allMessages 中 user 消息的最大 time（无 time 字段/空缓冲 → -1）。
+    // 服务器时间戳基线用于「认领」判定，不受窗口截断/索引错位影响（R3）。
+    function maxUserMessageTimeInBuf() {
+      if (!allMessages || !allMessages.length) return -1;
+      var mx = -1;
+      for (var mi = 0; mi < allMessages.length; mi++) {
+        var mm = allMessages[mi];
+        if (!mm || mm.role !== 'user') continue;
+        if (typeof mm.time === 'number' && mm.time > mx) mx = mm.time;
+      }
+      return mx;
+    }
+
+    // 给定消息集合中是否存在「基线之后」且文本匹配的 user 消息。
+    // 判定优先级（R3）：baseUserTime >= 0 → 只认 message.time > baseUserTime 的匹配；
+    // 否则 baseUserCount >= 0 → 只比对 user 索引 >= baseUserCount 的消息；
+    // baseUserCount < 0 → 未知基线，绝不自动消费（R2c）；
+    // 两个字段都不存在（注入式/历史遗留槽）→ 旧规则（任一条 user 文本匹配，A6 依赖）。
+    function queuedSlotClaimedBy(slot, msgs) {
+      if (!slot || !msgs || !msgs.length) return false;
+      var queued = normalizeQueuedText(slot.prompt);
+      if (!queued) return false;
+      var i;
+      var baseTime = (typeof slot.baseUserTime === 'number') ? slot.baseUserTime : -1;
+      if (baseTime >= 0) {
+        for (i = 0; i < msgs.length; i++) {
+          var tm = msgs[i];
+          if (!tm || tm.role !== 'user' || !tm.text) continue;
+          var tTime = (typeof tm.time === 'number') ? tm.time : 0;
+          if (tTime > baseTime && queuePromptMatches(queued, tm.text)) return true;
+        }
+        return false;
+      }
+      if (typeof slot.baseUserCount === 'number') {
+        if (slot.baseUserCount < 0) return false;
+        var seenUsers = 0;
+        for (i = 0; i < msgs.length; i++) {
+          var cm = msgs[i];
+          if (!cm || cm.role !== 'user' || !cm.text) continue;
+          if (seenUsers >= slot.baseUserCount && queuePromptMatches(queued, cm.text)) return true;
+          seenUsers += 1;
+        }
+        return false;
+      }
+      for (i = 0; i < msgs.length; i++) {
+        var lm = msgs[i];
+        if (!lm || lm.role !== 'user' || !lm.text) continue;
+        if (queuePromptMatches(queued, lm.text)) return true;
+      }
+      return false;
+    }
+
+    // 排队槽是否已被历史接管（防止切回/同步/追发回执把已执行消息复活为「排队」）。
+    // 必须同会话（allMessagesSid === sid）才比对，跨会话文本绝不参与。
+    function isQueuedPromptConsumed(sid) {
+      if (!sid) return false;
+      var slot = queuedPromptStore[sid];
+      if (!slot) return false;
+      if (allMessagesSid !== sid || !allMessages || !allMessages.length) return false;
+      return queuedSlotClaimedBy(slot, allMessages);
+    }
+
+    // 兜底探测（F5/R1）：服务端在 turn/end 即关流时认领帧可能送不到，故对「仍有排队槽且运行中」的
+    // 当前会话每 5s 做一次**无副作用**探测：直接 GET /api/history 只读解析 messages，
+    // 绝不调用 loadHistory、绝不触碰 allMessages / chatContainer / 渲染（流式进行中也安全）。
+    // 绝不常驻轮询其它会话：sid 变化、槽被清除或会话非 running 时立即停表。
+    var queueClaimPollTimer = null;
+    var queueClaimPollSid = '';
+    var queueClaimPollXhr = null;
+
+    function stopQueueClaimPoll() {
+      if (queueClaimPollTimer) {
+        try { clearInterval(queueClaimPollTimer); } catch (eQP1) {}
+        queueClaimPollTimer = null;
+      }
+      queueClaimPollSid = '';
+      if (queueClaimPollXhr) {
+        try { queueClaimPollXhr.abort(); } catch (eQP2) {}
+        queueClaimPollXhr = null;
+      }
+    }
+
+    function probeQueuedClaim(sid) {
+      if (!sid || !queuedPromptStore[sid]) return;
+      if (queueClaimPollXhr) return; // 单飞：上一次探测未收口则不叠发
+      var cwd = getCwd();
+      if (!cwd) return;
+      var xhr = new XMLHttpRequest();
+      queueClaimPollXhr = xhr;
+      xhr.open('GET', '/api/history?cwd=' + encodeURIComponent(cwd) + '&id=' + encodeURIComponent(sid) + '&turns=2', true);
+      try { xhr.timeout = 8000; } catch (ePT) {}
+      xhr.ontimeout = function() {
+        if (queueClaimPollXhr === xhr) queueClaimPollXhr = null;
+      };
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState !== 4) return;
+        if (queueClaimPollXhr === xhr) queueClaimPollXhr = null;
+        var st = 0;
+        try { st = xhr.status; } catch (ePS) {}
+        if (!(st === 200 || st === 0)) return;
+        var msgs = null;
+        try {
+          var data = JSON.parse(xhr.responseText || '[]');
+          if (data && typeof data === 'object' && !Array.isArray(data) && data.messages) msgs = data.messages;
+          else if (Array.isArray(data)) msgs = data;
+        } catch (pe) { return; }
+        if (!msgs || !msgs.length) return;
+        var slot = queuedPromptStore[sid];
+        if (!slot) { stopQueueClaimPoll(); return; }
+        if (!queuedSlotClaimedBy(slot, msgs)) return;
+        if (sid === currentSessionId) {
+          clearQueueDock(sid);
+        } else {
+          try { delete queuedPromptStore[sid]; } catch (ePD) {}
+          stopQueueClaimPoll();
+        }
+      };
+      try { xhr.send(); } catch (ePx) { queueClaimPollXhr = null; }
+    }
+
+    function ensureQueueClaimPoll() {
+      var sid = currentSessionId;
+      if (!sid || !queuedPromptStore[sid] || !sessState.running) {
+        stopQueueClaimPoll();
+        return;
+      }
+      if (queueClaimPollTimer && queueClaimPollSid === sid) return;
+      stopQueueClaimPoll();
+      queueClaimPollSid = sid;
+      queueClaimPollTimer = setInterval(function () {
+        var pollSid = queueClaimPollSid;
+        if (!pollSid || pollSid !== currentSessionId || !queuedPromptStore[pollSid] || !sessState.running) {
+          stopQueueClaimPoll();
+          return;
+        }
+        probeQueuedClaim(pollSid);
+      }, 5000);
+    }
+
     function renderQueueDock() {
       if (!queueDockEl) return;
       if (!pendingQueuedItem || pendingQueuedItem.sid !== currentSessionId) {
@@ -12829,13 +13067,33 @@
       if (!sid) return;
       if (!item) {
         try { delete queuedPromptStore[sid]; } catch (e) {}
+        ensureQueueClaimPoll();
         return;
+      }
+      // 基线（F3/R2/R3）：记录「本次排队之前」的 user 消息条数与最大服务端时间戳。
+      // - 仅当 allMessages 确属本会话（allMessagesSid === sid）才记录，否则 baseUserCount = -1
+      //   （未知基线，绝不自动消费，防止新会话首轮 allMessagesSid='' 时误清未执行槽）；
+      // - baseUserTime 用服务器时间戳判定认领，不受窗口截断/索引错位影响；
+      // - ok 回执重写槽时沿用既有基线（item 已带 baseUserCount/baseUserTime）。
+      var baseUserCount = -1;
+      var baseUserTime = -1;
+      if (typeof item.baseUserCount === 'number') {
+        baseUserCount = item.baseUserCount;
+      } else if (allMessagesSid === sid) {
+        baseUserCount = countUserMessagesInBuf();
+      }
+      if (typeof item.baseUserTime === 'number') {
+        baseUserTime = item.baseUserTime;
+      } else if (allMessagesSid === sid) {
+        baseUserTime = maxUserMessageTimeInBuf();
       }
       queuedPromptStore[sid] = {
         sid: sid,
         prompt: item.prompt || '',
         itemId: item.itemId || '',
-        mode: item.mode || 'queue'
+        mode: item.mode || 'queue',
+        baseUserCount: baseUserCount,
+        baseUserTime: baseUserTime
       };
       // 2GB 内存约束：分槽最多保留 10 个会话
       try {
@@ -12848,16 +13106,24 @@
           delete queuedPromptStore[dropKey];
         }
       } catch (eCap) {}
+      ensureQueueClaimPoll();
     }
 
     function restoreQueuedPrompt(sid) {
       if (!sid || !queuedPromptStore[sid]) {
         pendingQueuedItem = null;
         renderQueueDock();
+        ensureQueueClaimPoll();
+        return;
+      }
+      // 防僵尸复活：该排队文本已作为真实消息落入本会话历史（已被上游认领）时，清槽且不再停靠
+      if (isQueuedPromptConsumed(sid)) {
+        clearQueueDock(sid);
         return;
       }
       pendingQueuedItem = queuedPromptStore[sid];
       renderQueueDock();
+      ensureQueueClaimPoll();
     }
 
     function clearQueueDock(targetSid) {
@@ -12869,6 +13135,7 @@
         pendingQueuedItem = null;
         renderQueueDock();
       }
+      ensureQueueClaimPoll();
     }
 
     function hideQueueDockKeepSlot() {
@@ -12923,6 +13190,16 @@
       var myItem = { sid: sid, prompt: prompt, itemId: '', mode: mode };
       pendingQueuedItem = myItem;
       stashQueuedPrompt(sid, myItem);
+      // ok 回执重写槽时沿用首次入槽的基线（条数 + 服务器时间戳），
+      // 防止期间历史刷新把基线推高导致漏判认领。
+      if (queuedPromptStore[sid]) {
+        if (typeof queuedPromptStore[sid].baseUserCount === 'number') {
+          myItem.baseUserCount = queuedPromptStore[sid].baseUserCount;
+        }
+        if (typeof queuedPromptStore[sid].baseUserTime === 'number') {
+          myItem.baseUserTime = queuedPromptStore[sid].baseUserTime;
+        }
+      }
       renderQueueDock();
 
       inputBox.value = '';
@@ -12949,7 +13226,14 @@
           } catch (pe) {}
           if (ok) {
             myItem.itemId = retItemId;
-            stashQueuedPrompt(sid, myItem);
+            // 回执守卫：该文本已作为本轮新消息进入本会话历史（上游已认领）时不再写槽，
+            // 否则会把已执行消息复活成「排队」（§C-1 防僵尸）。
+            // 同时禁止复活已因认领被清掉的槽（槽已删除且不再是当前停靠项 → 纯回执服务，不再入槽）。
+            var slotAlive = !!queuedPromptStore[sid];
+            var stillActive = (pendingQueuedItem === myItem);
+            if (!isQueuedPromptConsumed(sid) && (stillActive || slotAlive)) {
+              stashQueuedPrompt(sid, myItem);
+            }
             if (pendingQueuedItem === myItem || (pendingQueuedItem && pendingQueuedItem.sid === sid)) {
               pendingQueuedItem.itemId = retItemId;
               renderQueueDock();

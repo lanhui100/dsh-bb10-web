@@ -1,0 +1,35 @@
+{
+  "verdict": "FAIL",
+  "findings": [
+    {
+      "file": "static/index.html",
+      "line": 3153,
+      "rule": "C-3/C-2 同源口径：normalizeSessionState 新增长期有效的 pendingInteraction 判据，但全仓无任何写入方清除该字段（sessCache 行对象只在 /api/sessions 全量重拉时才被整体替换；syncSessionPhase:3192-3193 与 applyLightStateToRow:11097 只写 isRunning/state）。waiting 会残留，并与 isRunning 相互矛盾，压掉既有 done/stopped 语义。",
+      "counterexample": "真实时序：① /api/sessions 返回 {id:A,isRunning:true,state:'waiting',pendingInteraction:'question'} 并原样存入 sessCache[cwd]；② 用户在窗口内作答，作答 POST 不再存活；③ 5s 后轻量 /api/sessions/status 返回 {isRunning:true,state:'running'} → applyLightStateToRow 写 row.state='running'、row.isRunning=true，pendingInteraction 仍在 → normalizeSessionState 命中 3153 返回 'waiting'；④ resolveEffectiveSessionState（:3269-3273）见 norm==='waiting' 返回 {isRunning:true,phase:'waiting'}，sendBtn 渲染为红色停止键。用户此刻点击发送想补一句，sendBtn.onclick（:13138-13142）判 isRunning 直接调 stopStreaming() → 取消掉正在跑的回合；输入框回车走 doSend 被判运行中而转 sendRunningPrompt（排队），不再发新轮次。⑤ 该错误态一直维持到 sessCache 全量重拉（WS_CACHE_STALE_MS=15000，:5307/:14035）为止；跨 cwd 的非当前会话行更久。⑥ 会话真正结束后 status 返回 isRunning:false，applyLightStateToRow 置 state='idle'，pendingInteraction 仍是 'question' → 头部仍渲染黄 '?'、底部仍显示「待回答提问」，done/stopped 终态符号被永久遮蔽到下次全量刷新。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 4459,
+      "rule": "C-2 性能条款（禁止新增每请求全量解压/扫描转录）：缓存键为 path:mtime:size，而运行中会话的转录每次 append 都改变 mtime+size，2s TTL 在最热的流式阶段恒不命中；sessionPendingQuestion 每次未命中都同步 readFileSync 整个 zstd 并对整个缓冲区 scanZstdFrames。旧实现对 isRunning 的行根本不做转录 IO（sessionRowState 之前是 isRunning?'running':sessionTerminalState），本变更把全量同步读放到了 running 行的 5s 轮询热路径上。",
+      "counterexample": "具体输入：会话 A 转录 30MB（长会话，上百帧），A 正在流式生成、task.pendingQuestion 为空。前端每 ≤5s 一次 GET /api/sessions/status?ids=[A,...]（refreshVisibleSessionStates 周期）+ 每 15s /api/sessions。每次请求：statSync(A) → cacheKey 因 size 变化而与上次不同 → 同步 readFileSync(30MB) + scanZstdFrames 全量扫描 + 解压 30 帧，全部在唯一 Node 事件循环上执行。同一事件循环正负责向该会话的 SSE 连接写 delta（broadcastTaskEvent→listener→res.write），30MB 同步读期间送达的 token 全部积压 → Q20 端流式出现秒级卡顿；卡顿时长随转录体积线性增长，会话越长越卡，且每个可见客户端各贡献一份。契约原文要求「禁止新增每请求全量解压」，此处规避了字面（只解压 30 帧）但保留了全量读+全量帧扫描。"
+    },
+    {
+      "file": "static/index.html",
+      "line": 12846,
+      "rule": "C-1 防僵尸判据把「历史里存在同文本 user 消息」等价于「本条排队已被认领」，且在 sendRunningPrompt 里槽是 POST 之前乐观写入的（:12960 stashQueuedPrompt → :13016 的 isQueuedPromptConsumed 守卫只阻止二次写槽、并不能回滚已写槽），于是重复 prompt 场景下排队槽被误判已消费而清掉，形成「未执行先消失」的另一侧缺陷。",
+      "counterexample": "具体输入：用户先在会话 A 正常发送「继续」（已落 allMessages，role=user），turn 结束后仍处于 running（多步）；用户在 queue 模式再次发送同样的「继续」。① restoreQueuedPrompt(sid)（:12921-12924）在任意一次 sync/history 到达时调用 isQueuedPromptConsumed(A) → allMessagesSid===A 且命中旧的「继续」→ 返回 true → clearQueueDock(A) 删除槽；② 但该条消息此刻仍在宿主 next-turn 队列里未执行，随后会被真实执行并追加第二条「继续」；③ 用户已在 toast 里被承诺「已排队 (按 Z 撤回)」，槽消失后无撤回入口（revokeQueuedPrompt 依赖 queuedPromptStore[sid]），用户按提示重发即产生重复 prompt。前缀匹配放大该误判：历史里有「继续优化测试」时排队「继续」同样被判消费；而 queuePromptMatches 只做 claimed.startsWith(queued)，反向（排队文本是历史文本的前缀）无防护。"
+    },
+    {
+      "file": "static/index.html",
+      "line": 11610,
+      "rule": "SSE 兼容/重放安全：attach 分支的 prompt-claimed 处理没有 replayDone 门控（同函数内 thought/tool 分支都用 `if (replayDone)` 拦截历史回放），而 attach 端点会把 task.events 最近 1000 帧原样 burst 重放（server.mjs:7278-7283 无过滤），其中就包含历史 prompt-claimed 帧。重连即可能用旧帧清掉新的排队槽。",
+      "counterexample": "具体时序：① T1 排队「继续」被认领，broadcastTaskEvent 把它写入 task.events（server.mjs:80）；② T3 用户又排队一条「继续」（新 itemId，宿主已受理，槽在 queuedPromptStore）；③ T4 网络抖动/页面切后台，checkAndReattach（:14001）重新 attach，attach 端点按 seq 重放 task.events 中 T1 的 {event:'prompt-claimed',data:{text:'继续'}}；④ 该帧在 replayDone=false 期间仍进入 11610 分支 → clearQueueDockIfClaimed(sid,'继续') 命中 T3 的槽 → clearQueueDock 删除；⑤ T3 那条实际仍排队并在稍后被执行，用户看到的是「已排队」toast 之后槽凭空消失、无法按 Z 撤回，重发即重复。live 分支（:12605）同样缺 replayDone 门控，且用 sendSid||currentSessionId 兜底，sendSid 为空时会落到「当前会话」，跨会话切换时存在清错会话槽的窗口。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 1832,
+      "rule": "C-1 服务端信号在真实宿主的 queue 生命周期上不可达：finishOnce 在 turn/end 时无条件 ws.close() 关闭 follow 流，而 queue 模式（session/prompt mode='queue' → agent.followup → next-turn）的 user/message 必然发生在上一轮 turn/end 之后，因此该帧永远到不了仍在关闭中的 follow 连接；重新 attach 时 follow 请求不带 since/回放参数（:1815），拿不到已经落盘的那条 user/message。D-1 的实际修复只依赖前端 isQueuedPromptConsumed 兜底，A6 用 stub 推帧无法暴露该缺口。",
+      "counterexample": "真实时序：① 会话 A 第 1 轮运行（task T1，follow ws W1 打开）；② 用户 queue 模式发「继续」，宿主 agent.followup 入 next-turn，POST 返回 ok+itemId；③ 第 1 轮结束 → follow 收到 turn/end → finishOnce 执行 ws.close()（:1832），task 标记完成；④ 宿主随即用 next-turn 消息开第 2 轮并 append user/message「继续」——此时 W1 已关闭，handler.handleSessionEvent 收不到该事件，prompt-claimed 永不广播；⑤ 前端只能等下一次 sync/loadHistory 走兜底清槽。若第 2 轮长时间无 sync 帧（或前端处于后台未 attach），D-1 症状「已执行仍显示排队」原样复现；同时该分支在真实宿主上是死代码，A6 的 stub 只验证了前端消费端。"
+    }
+  ]
+}

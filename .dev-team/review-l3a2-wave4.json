@@ -1,0 +1,29 @@
+{
+  "verdict": "FAIL",
+  "findings": [
+    {
+      "file": "static/index.html",
+      "line": 12934,
+      "rule": "F5 兜底轮询缺少与在途本地流的互斥：每 5s 直接调 loadHistory(silent)，而 loadHistory 会整体替换 allMessages（11919）并重建 chatContainer（11928→10616 innerHTML=''）。本地 /api/chat/stream 的流式渲染锚定在重建前创建的 DOM 节点（doSend 的 assistantWrap/liveTextBubble，12313/12350）上，轮询因此在运行中覆盖视口并让本次回答永久不可见；这不是 tick 级闪烁，而是流式路径的状态互相覆盖。",
+      "counterexample": "时序：① 新会话发长回答，doSend 建 assistantWrap（12309-12313），delta 经 ensureLiveBubble（12350）挂到 chatContainer；② 回答未结束时用户追发一条（doSend→12217 sendRunningPrompt→13096 stashQueuedPrompt→12919 ensureQueueClaimPoll 因 sessState.running=true 起 5s 定时器）；③ 第 5s 定时器 loadHistory(getCwd(),sid,cb,true) → 11919 allMessages=msgs、11928 renderWindowedMessages(false,false) → 10616 chatContainer.innerHTML='' 把流式节点整体摘除；④ 后续 delta 的 ensureLiveBubble 因 liveTextBubble.parentNode===assistantWrap 仍成立而返回已脱落节点（12346），屏幕上不再出现任何新文本；⑤ 'done' 时 12694 flushRender(true)/12698 与 12703 仍操作脱落节点，12704 clearQueueDock 立刻停表，最终回答在这条路径上永不重渲染（除非用户切会话或触发 attach）。附带：11867 每 5s 把状态条刷成『正在读取历史记录...』，覆盖『正在思考与生成回复』。"
+    },
+    {
+      "file": "static/index.html",
+      "line": 12993,
+      "rule": "F3 基线语义边界不成立：baseUserCount 仅在 allMessagesSid===sid 时取缓冲计数，否则落 0；而『0』与『排队前确无 user 消息』不可区分（12894 又 clamp 到 0），isQueuedPromptConsumed（12899）的 seenUsers>=0 恒真，等价于『历史里存在任意同文本 user 消息即已消费』，F3 原缺陷在最常见的新会话追发路径上原样复活。",
+      "counterexample": "具体输入：新会话（startNewChat/selectWorkspace 置 allMessagesSid=''，doSend 与 appendMessage 都不回写 allMessagesSid）先发『继续』进入第 1 轮（currentSessionId 由 12509 置为 S1，allMessagesSid 仍为 ''）；运行中再排队同一文本『继续』→ stashQueuedPrompt 的 else-if 不成立 → base=0；5s 后 F5 轮询 loadHistory 静默加载（11920 allMessagesSid=S1，allMessages 含第 1 轮的『继续』）→ restoreQueuedPrompt→isQueuedPromptConsumed：seenUsers=0>=base=0 且文本相等 → 返回 true → clearQueueDock 删槽并隐藏停靠条。该追发此刻仍在宿主 next-turn 队列未执行，用户已收到『已排队 (按 Z 撤回)』却失去撤回入口，稍后它照常执行 → 『未执行先消失』+ 重发即重复，A9 用例（先进会话加载历史再排队，base=1）覆盖不到此路径。"
+    },
+    {
+      "file": "static/index.html",
+      "line": 12899,
+      "rule": "F3/F4 交互：baseUserCount 是『当前 allMessages 中 user 消息条数』这种数组上下文语义，但 allMessages 会被 F5 轮询以 turns=WINDOW_PAGE_TURNS(5) 的窗口整体替换（11919，不是前插），基线可能永久大于重载后的 user 条数，使真实认领永远识别不到；一旦认领帧落在重连回放窗口内被 replayDone 门控丢弃（11632），就没有任何兜底能清槽。",
+      "counterexample": "时序：① 进入会话后点『加载更早历史』（12042 前插），allMessages 现有 12 条 user 消息；② 此时追发排队 → base=12；③ 第 5s 的 F5 轮询 loadHistory(turns=5) 把 allMessages 换成最近 5 轮（仅 4 条 user）→ 之后 seenUsers 最多 3，永远 <12，isQueuedPromptConsumed 恒 false；④ 恰好认领发生在一次 checkAndReattach 的回放 burst 内（11327 replayDone 重新为 false → 11632 门控丢弃 prompt-claimed），服务端 follow 又已在 turn/end 关流 → 槽位永久残留，且 ensureQueueClaimPoll 因槽仍在+sessState.running 持续每 5s 整窗重渲染（叠加时每次重渲染都把 allMessages 再压回 5 轮，基线永不回落）。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 4469,
+      "rule": "C-2 性能条款（禁止新增每请求全量解压）只修了一半：sessionPendingQuestion 的零磁盘分支仅覆盖『本进程存在 status==='running' 的 activeTask』；宿主自己驱动、本进程尚无 task 的 running 行仍走分支②，对整份 zstd 做 readFileSync+scanZstdFrames（只解压尾部 30 帧），而缓存键 path:mtime:size 在流式 append 期间恒不命中 2s TTL。",
+      "counterexample": "具体输入：在宿主 dsh web（127.0.0.1:3080）启动长会话 A 并持续流式；Q20 端只打开列表、未 attach（activeTasks 无 A，故 3637/3683 的 task 为 undefined）。/api/sessions 每 ~15s、/api/sessions/status?ids=[A,...] 每 ≤5s 各命中一次 sessionRowState→sessionPendingQuestion(zstdPath, undefined) → 4464 statSync → 4469 fs.readFileSync(整份 30MB 转录)+全帧扫描+解压 30 帧，全在唯一 Node 事件循环上；同一循环负责其它会话 SSE 写与 remote.mux 帧转发，卡顿时长随转录体积线性增长。即上一轮 F2 的『全量读+全量帧扫描』在该（宿主优先管道）配置下仍然成立。"
+    }
+  ]
+}

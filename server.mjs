@@ -10,6 +10,7 @@ import { createStreamFold } from './lib/stream-fold.mjs';
 import { createHostLiveState } from './lib/host-live-state.mjs';
 import { createSessionEventHandler as createSessionEventHandlerImpl } from './lib/session-events.mjs';
 import { classifyQuestionFrame } from './lib/ask-ownership.mjs';
+import { hasPendingQuestionFromEvents } from './lib/session-waiting.mjs';
 import { applySubagentLite } from './lib/subagent-lite.mjs';
 import {
   extractEventUsage,
@@ -1537,8 +1538,22 @@ async function sessionStatusFact(sessionId) {
   // U1（C-24/G2）：必须把本地 activeTask 一并传入唯一判定函数。
   // 否则宿主失联走 SDK 回退时，同一会话 /api/sessions 报 running 而 status 报非 running，
   // 前端见 known:true&&!isRunning 即判 down 并置对账 cwd → 5s 自激 loadSessions 循环。
-  const resolved = await resolveSessionRunning({ task: activeTasks.get(sid), sid: sid });
+  const task = activeTasks.get(sid);
+  const resolved = await resolveSessionRunning({ task: task, sid: sid });
   if (resolved.isRunning) {
+    // C-2（Wave 2026-10-19）：running 与 pendingInteraction 正交——等待作答时仍报 isRunning=true，
+    // 但 state 下沉为 waiting 并附 pendingInteraction:'question'（与 /api/sessions 行单点同口径）。
+    // L3-A 修复：本进程有在飞 task 时仅采信内存真源，零磁盘 IO（不再定位目录 / 读转录）；
+    // 其余情况才按既有进程内索引 / 有界定位取 zstdPath（绝不新增全盘扫描）。
+    const liveTask = (task && task.status === 'running') ? task : null;
+    let zstdPath = null;
+    if (!liveTask) {
+      const sessionDir = sessionDirIndex.get(sid) || locateSessionDirForStatus(sid);
+      zstdPath = sessionDir ? findSessionZstdPath(sessionDir) : null;
+    }
+    if (sessionPendingQuestion(zstdPath, liveTask)) {
+      return { isRunning: true, state: 'waiting', pendingInteraction: 'question', known: true, source: resolved.source || 'heuristic' };
+    }
     return { isRunning: true, state: 'running', known: true, source: resolved.source || 'heuristic' };
   }
   const authoritative = (resolved.source === 'live' || resolved.source === 'list' || resolved.source === 'task');
@@ -3624,7 +3639,8 @@ async function getSessionsForCwd(targetCwd, filter = 'hide-archived') {
           if (!isRunning && header && header.hasTurns === false) {
             continue; // 过滤无实质消息的 blank 会话
           }
-          list.push({
+          const rowState = sessionRowState({ isRunning, zstdPath, task });
+          const row = {
             id: sid,
             title: header?.title || '',
             createdAt: header?.createdAt || st.birthtimeMs,
@@ -3635,8 +3651,10 @@ async function getSessionsForCwd(targetCwd, filter = 'hide-archived') {
             cwd: header?.cwd || targetCwd,
             isRunning,
             isArchived,
-            state: isRunning ? 'running' : sessionTerminalState(zstdPath, task),
-          });
+            state: rowState.state,
+          };
+          if (rowState.pendingInteraction) row.pendingInteraction = rowState.pendingInteraction;
+          list.push(row);
         } catch {}
       }
     }
@@ -3668,7 +3686,8 @@ async function getSessionsForCwd(targetCwd, filter = 'hide-archived') {
         continue; // 过滤无实质消息的 blank 会话
       }
 
-      list.push({
+      const rowState = sessionRowState({ isRunning, zstdPath, task });
+      const row = {
         id: sid,
         title: header?.title || '',
         createdAt: header?.createdAt || st.birthtimeMs,
@@ -3679,8 +3698,10 @@ async function getSessionsForCwd(targetCwd, filter = 'hide-archived') {
         cwd: header?.cwd || targetCwd,
         isRunning,
         isArchived,
-        state: isRunning ? 'running' : sessionTerminalState(zstdPath, task),
-      });
+        state: rowState.state,
+      };
+      if (rowState.pendingInteraction) row.pendingInteraction = rowState.pendingInteraction;
+      list.push(row);
     } catch {
       // ignore
     }
@@ -3748,7 +3769,8 @@ async function getUngroupedSessions() {
         if (!isRunning && header && header.hasTurns === false) continue;
         const zst = fs.statSync(zstdPath);
         const st = fs.statSync(sPath);
-        list.push({
+        const rowState = sessionRowState({ isRunning, zstdPath, task });
+        const row = {
           id: sid,
           title: (header && header.title) || '',
           createdAt: (header && header.createdAt) || st.birthtimeMs,
@@ -3758,8 +3780,10 @@ async function getUngroupedSessions() {
           version: header && header.version,
           cwd: (header && header.cwd) || '',
           isRunning,
-          state: isRunning ? 'running' : sessionTerminalState(zstdPath, task),
-        });
+          state: rowState.state,
+        };
+        if (rowState.pendingInteraction) row.pendingInteraction = rowState.pendingInteraction;
+        list.push(row);
       } catch {
         // ignore
       }
@@ -4417,6 +4441,132 @@ function sessionTerminalState(zstdPath, task) {
   } catch {
     return 'idle';
   }
+}
+
+/**
+ * C-2（Wave 2026-10-19）：会话是否正在等待用户作答。
+ * 判定分治（L3-A/L3-A2 修复：running 行不再整份 readFileSync + 全帧扫描）：
+ *   ① task 存在且 status==='running'（本进程真实驱动该会话）→ **仅**采信 task.pendingQuestion
+ *      （权威内存真源，问题下发时 set、用户应答时清空，语义完备），绝不读转录、零磁盘 IO；
+ *   ② 其它情况（宿主其它进程驱动 / 本进程重启后 / 本地 task 已终态）→ 有界尾部读取
+ *      `[max(0,size-256KB), size)`，窗口内按 zstd magic 定位候选帧，仅解码最后 ≤30 个完整帧
+ *      判定未结算 ask_user_question；窗口内无任何可用帧（极端大帧）才回退整份读取。
+ *      该分支按 `path:mtime:size` 缓存 SESSION_STATE_CACHE_TTL_MS（与 sessionStateCache 同款），
+ *      流式 append 时单次最多读 256KB（不再随转录体积线性阻塞事件循环）。
+ * 任何异常一律降级为 false（不得把 IO 故障说成 waiting）。
+ */
+const sessionPendingQuestionCache = new Map();
+// L3-A2 #4：有界尾部窗口。zstd 帧按事件 append，尾部 256KB 足以覆盖最近 ≤30 帧，且为常数上界。
+const SESSION_PENDING_TAIL_WINDOW_BYTES = 262144;
+const SESSION_PENDING_TAIL_MAX_FRAMES = 30;
+const SESSION_PENDING_TAIL_MAX_ATTEMPTS = 64;
+
+/** 有界尾部读取：读取 `[max(0, size-窗口), size)`，失败返回 null（调用方回退整份读取）。 */
+function readSessionTailWindow(zstdPath, size) {
+  if (!(size > 0)) return null;
+  const windowBytes = Math.min(size, SESSION_PENDING_TAIL_WINDOW_BYTES);
+  let fd = null;
+  try {
+    fd = fs.openSync(zstdPath, 'r');
+    const buf = Buffer.allocUnsafe(windowBytes);
+    const base = size - windowBytes;
+    let read = 0;
+    while (read < windowBytes) {
+      const n = fs.readSync(fd, buf, read, windowBytes - read, base + read);
+      if (!n) break;
+      read += n;
+    }
+    if (read <= 0) return null;
+    return read === windowBytes ? buf : buf.subarray(0, read);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
+/**
+ * 窗口内解码尾部帧文本：按 zstd magic 定位候选起点，从尾部向前收集 ≤30 个可解码帧，
+ * 截断帧 / 误命中 magic 的候选切片一律尝试失败即跳过（不抛）。
+ */
+function decodeSessionTailWindow(buf) {
+  const starts = [];
+  for (let i = 0; i + 4 <= buf.length; i++) {
+    if (buf.readUInt32LE(i) === ZSTD_MAGIC) starts.push(i);
+  }
+  if (starts.length === 0) return '';
+  const parts = [];
+  let attempts = 0;
+  for (let k = starts.length - 1;
+    k >= 0 && parts.length < SESSION_PENDING_TAIL_MAX_FRAMES && attempts < SESSION_PENDING_TAIL_MAX_ATTEMPTS;
+    k--) {
+    attempts += 1;
+    const start = starts[k];
+    const end = (k + 1 < starts.length) ? starts[k + 1] : buf.length;
+    if (end <= start) continue;
+    try {
+      parts.push(zlib.zstdDecompressSync(buf.subarray(start, end)).toString('utf8'));
+    } catch {
+      // 截断帧（append 进行中）/ 误命中 magic：跳过
+    }
+  }
+  return parts.reverse().join('');
+}
+
+function sessionPendingQuestion(zstdPath, task) {
+  // ① 本进程正在驱动的会话：内存真源独占，绝不触碰磁盘。
+  if (task && task.status === 'running') return !!(task.pendingQuestion);
+  // ② 无本地在飞 task：才允许转录尾部推断（有界读取 + 2s TTL 缓存）。
+  if (!zstdPath) return false;
+  try {
+    const st = fs.statSync(zstdPath);
+    const cacheKey = `${zstdPath}:${st.mtimeMs}:${st.size}`;
+    const now = Date.now();
+    const cached = sessionPendingQuestionCache.get(cacheKey);
+    if (cached && now - cached.at < SESSION_STATE_CACHE_TTL_MS) return cached.pending;
+    let tailText = '';
+    const tailBuf = readSessionTailWindow(zstdPath, st.size);
+    if (tailBuf && tailBuf.length > 0) tailText = decodeSessionTailWindow(tailBuf);
+    if (!tailText) {
+      // 罕见路径：窗口内无任何完整帧（极端大帧 / 窗口落点损坏）→ 回退整份读取以保正确性。
+      const buf = fs.readFileSync(zstdPath);
+      const frames = scanZstdFrames(buf);
+      const maxFrames = Math.min(frames.length, SESSION_PENDING_TAIL_MAX_FRAMES);
+      for (let i = Math.max(0, frames.length - maxFrames); i < frames.length; i++) {
+        try {
+          tailText += zlib.zstdDecompressSync(buf.subarray(frames[i].start, frames[i].end)).toString('utf8');
+        } catch {
+          // skip corrupted frame
+        }
+      }
+    }
+    const pending = hasPendingQuestionFromEvents(tailText.split('\n'));
+    if (sessionPendingQuestionCache.size > 500) sessionPendingQuestionCache.clear();
+    sessionPendingQuestionCache.set(cacheKey, { pending, at: now });
+    return pending;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * C-2 行状态单点口径（/api/sessions 三处构造点共用）：
+ *   - 非 running → sessionTerminalState 既有语义（永不产出 waiting）；
+ *   - running 且等待作答 → { state:'waiting', pendingInteraction:'question' }（isRunning 仍为 true）；
+ *   - 其余 → { state:'running' }，pendingInteraction 缺省（不改变既有字段形状）。
+ */
+function sessionRowState(input) {
+  const opts = (input && typeof input === 'object') ? input : {};
+  const task = opts.task || null;
+  if (!opts.isRunning) {
+    return { state: sessionTerminalState(opts.zstdPath, task), pendingInteraction: null };
+  }
+  if (sessionPendingQuestion(opts.zstdPath, task)) {
+    return { state: 'waiting', pendingInteraction: 'question' };
+  }
+  return { state: 'running', pendingInteraction: null };
 }
 
 /**

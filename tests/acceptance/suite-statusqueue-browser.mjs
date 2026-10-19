@@ -31,11 +31,21 @@ const SID_A6 = 'session-acc-sq-a6-queue';
 const SID_A6_OTHER = 'session-acc-sq-a6-other';
 const SID_A7 = 'session-acc-sq-a7-adversarial';
 const SID_A7_OTHER = 'session-acc-sq-a7-other';
+const SID_A8 = 'session-acc-sq-a8-stale-wait';
+const SID_A9 = 'session-acc-sq-a9-dup-prompt';
+const SID_A9_OTHER = 'session-acc-sq-a9-other';
+const SID_A10 = 'session-acc-sq-a10-replay-gate';
+const SID_A11 = 'session-acc-sq-a11-stream-poll';
 
 const TEXT_A6 = 'A6 排队消息已被上游认领的回归文本';
 const TEXT_A6_OTHER = 'A6 另一个会话的历史文本';
 const TEXT_A7 = 'A7 对抗守卫的当前排队文本';
 const TEXT_A7_OTHER = 'A7 其它会话的文本，不得误清当前槽';
+const TEXT_A9 = 'A9 与旧轮次完全相同的排队文本';
+const TEXT_A9_OTHER = 'A9 另一个会话的历史文本';
+const TEXT_A10 = 'A10 回放门控的排队文本';
+const TEXT_A11_SEND = 'A11 流式提问：请分段输出';
+const TEXT_A11_QUEUE = 'A11 流式期间追发的排队消息';
 
 async function loadPlaywright() {
   const candidates = [];
@@ -170,7 +180,7 @@ async function startFixture(runningSids) {
 }
 
 /** 打开页面并等待 bootstrap 完成；routeSetup 会在 goto 之前完成拦截器安装。 */
-async function openApp(browser, srv, cwd, sid, routeSetup) {
+async function openApp(browser, srv, cwd, sid, routeSetup, extraInit) {
   const context = await browser.newContext({ viewport: { width: 720, height: 720 } });
   await context.addInitScript(function (o) {
     try {
@@ -184,6 +194,7 @@ async function openApp(browser, srv, cwd, sid, routeSetup) {
     if (msg.type() === 'error') errors.push('[console.error] ' + msg.text());
   });
   page.on('pageerror', (err) => errors.push('[pageerror] ' + err.message));
+  if (extraInit && extraInit.fn) await context.addInitScript(extraInit.fn, extraInit.arg || null);
   if (routeSetup) await routeSetup(page);
   const resp = await page.goto(srv.base + '/', { waitUntil: 'load', timeout: 30000 });
   assertOk(resp && resp.status() === 200, 'STATUSQUEUE 页面 HTTP 状态', 200, resp ? resp.status() : '(no response)');
@@ -249,7 +260,7 @@ async function selectSessionBySid(page, sid) {
 function readSessRow(page, marker) {
   return page.evaluate((mk) => {
     const rows = document.querySelectorAll('#sess-tree .tree-sess');
-    const out = { count: rows.length, found: false, text: '', hasWait: false, hasRun: false, dotText: '' };
+    const out = { count: rows.length, found: false, text: '', hasWait: false, hasRun: false, hasStop: false, hasErr: false, dotText: '' };
     for (let i = 0; i < rows.length; i += 1) {
       const t = rows[i].textContent || '';
       if (t.indexOf(mk) >= 0) {
@@ -259,6 +270,8 @@ function readSessRow(page, marker) {
         const r = rows[i].querySelector('.run-dot');
         out.hasWait = !!w;
         out.hasRun = !!r;
+        out.hasStop = !!rows[i].querySelector('.stop-dot');
+        out.hasErr = !!rows[i].querySelector('.err-dot');
         out.dotText = w ? (w.textContent || '') : (r ? (r.textContent || '') : '');
         break;
       }
@@ -362,6 +375,166 @@ async function injectStaleQueueSlot(page, sid, text) {
   }, { sid: sid, text: text });
 }
 
+/** /api/sessions 行注入（可变 poison：首屏注入 pendingInteraction，随后停止注入以模拟“快照变陈旧”）。 */
+async function overrideSessionsRowDynamic(page, sid, buildOverride) {
+  await page.route(/\/api\/sessions\?/, async (route) => {
+    try {
+      const response = await route.fetch();
+      const raw = await response.text();
+      let rows = null;
+      try { rows = JSON.parse(raw); } catch { rows = null; }
+      const patched = Array.isArray(rows)
+        ? rows.map((r) => {
+          if (!r || r.id !== sid) return r;
+          const ov = buildOverride();
+          return ov ? Object.assign({}, r, ov) : r;
+        })
+        : rows;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(patched) });
+    } catch (err) {
+      console.log('  (sessions 注入失败: ' + redact(err.message) + ')');
+      try { await route.continue(); } catch { /* 页面已关闭 */ }
+    }
+  });
+}
+
+/** /api/sessions/status 固定回包：所有被询问的 id 一律 running（无 pendingInteraction 字段）。 */
+async function overrideStatusRunning(page) {
+  await page.route(/\/api\/sessions\/status\?/, async (route) => {
+    try {
+      const url = new URL(route.request().url());
+      const ids = String(url.searchParams.get('ids') || '').split(',').map((x) => x.trim()).filter(Boolean);
+      const states = {};
+      for (let i = 0; i < ids.length; i += 1) {
+        states[ids[i]] = { isRunning: true, state: 'running', known: true };
+      }
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ ok: true, at: Date.now(), states: states }),
+      });
+    } catch {
+      try { await route.continue(); } catch { /* 页面已关闭 */ }
+    }
+  });
+}
+
+/** 等待某个点（.wait-dot / .run-dot）出现；返回是否出现（不抛异常，由断言给期望/实际）。 */
+async function waitRowDot(page, selector, marker, timeoutMs) {
+  try {
+    await page.waitForFunction((o) => {
+      const rows = document.querySelectorAll('#sess-tree .tree-sess');
+      for (let i = 0; i < rows.length; i += 1) {
+        if ((rows[i].textContent || '').indexOf(o.mk) >= 0) return !!rows[i].querySelector(o.sel);
+      }
+      return false;
+    }, { sel: selector, mk: marker }, { timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 等待 attach XHR 收口（readyState 4 已释放），作为“注入帧已被处理”的可观测信号。 */
+async function waitAttachDrained(page, timeoutMs = 8000) {
+  await waitFor(() => page.evaluate(() => typeof attachXhr !== 'undefined' && attachXhr === null),
+    { timeoutMs: timeoutMs, label: 'attach 流收口（帧处理完成）' });
+}
+
+/** 触发一次重连挂载（真实 UI 通道：window focus → checkAndReattach）。 */
+async function triggerReattach(page) {
+  await page.evaluate(() => {
+    sessState.running = true;
+    try { window.dispatchEvent(new Event('focus')); } catch (e) { window.dispatchEvent(document.createEvent('Event')); }
+  });
+}
+
+/**
+ * 页面级 XHR 测试桩（仅测试侧，绝不改生产码）：
+ * 让 POST /api/chat/stream 以真实 SSE 形态分段放行（readyState 3 增量 → readyState 4 收口），
+ * 从而能在「流式在途」期间跨越 5s 兜底探测窗口做非破坏性观测。
+ * 同时计数 /api/history 请求（证明 F5/R1 兜底探测确实在本窗口内跑过）。
+ */
+function streamStubInit(cfgInPage) {
+    var NativeXHR = window.XMLHttpRequest;
+    var nativeOpen = NativeXHR.prototype.open;
+    window.__a11 = { histFetches: 0, frames: 0, removed: 0, minChildren: 99, started: false };
+
+    NativeXHR.prototype.open = function (method, url) {
+      var u = String(url || '');
+      if (u.indexOf('/api/history') >= 0) window.__a11.histFetches += 1;
+      if (method === 'POST' && u.indexOf('/api/chat/stream') >= 0) {
+        var self = this;
+        var st = { rs: 1, status: 0, text: '', timers: [] };
+        this.__a11stub = st;
+        try {
+          Object.defineProperty(this, 'readyState', { configurable: true, get: function () { return st.rs; } });
+          Object.defineProperty(this, 'status', { configurable: true, get: function () { return st.status; } });
+          Object.defineProperty(this, 'responseText', { configurable: true, get: function () { return st.text; } });
+          Object.defineProperty(this, 'response', { configurable: true, get: function () { return st.text; } });
+          Object.defineProperty(this, 'statusText', { configurable: true, get: function () { return 'OK'; } });
+        } catch (eDef) { /* 老引擎忽略 */ }
+        this.setRequestHeader = function () {};
+        this.getResponseHeader = function () { return 'text/event-stream'; };
+        this.getAllResponseHeaders = function () { return 'content-type: text/event-stream\r\n'; };
+        this.abort = function () {
+          try { for (var ai = 0; ai < st.timers.length; ai++) clearTimeout(st.timers[ai]); } catch (eAb) {}
+          st.timers = [];
+          this.__aborted = true;
+          st.rs = 4;
+        };
+        this.send = function () {
+          st.status = 200;
+          st.rs = 2;
+          if (self.onreadystatechange) { try { self.onreadystatechange(); } catch (e2) {} }
+          st.rs = 3;
+          window.__a11.started = true;
+          var steps = cfgInPage.steps;
+          for (var si = 0; si < steps.length; si += 1) {
+            (function (step) {
+              st.timers.push(setTimeout(function () {
+                if (self.__aborted) return;
+                try {
+                  st.text += step.frame;
+                  if (step.terminal) st.rs = 4; else st.rs = 3;
+                  if (self.onreadystatechange) self.onreadystatechange();
+                  window.__a11.frames += 1;
+                } catch (e3) { /* 帧回调异常不得中断时间线 */ }
+              }, step.delay));
+            })(steps[si]);
+          }
+        };
+        return;
+      }
+    return nativeOpen.apply(this, arguments);
+  };
+}
+
+/** 记录流式在途节点身份 + chatContainer 破坏性变更（清空/替换）。 */
+async function armStreamWatcher(page) {
+  return page.evaluate(() => {
+    var nodes = document.querySelectorAll('#chat-container .msg-assistant');
+    window.__a11Live = nodes.length ? nodes[nodes.length - 1] : null;
+    window.__a11Text0 = window.__a11Live ? (window.__a11Live.textContent || '') : '';
+    window.__a11.frames0 = window.__a11.frames;
+    window.__a11.removed = 0;
+    var cc = document.getElementById('chat-container');
+    window.__a11.minChildren = cc ? cc.childElementCount : 0;
+    window.__a11.ccText0 = cc ? (cc.textContent || '').length : 0;
+    window.__a11Obs = new MutationObserver(function (muts) {
+      if (!cc) return;
+      if (cc.childElementCount < window.__a11.minChildren) window.__a11.minChildren = cc.childElementCount;
+      for (var i = 0; i < muts.length; i += 1) {
+        var m = muts[i];
+        if (m.type === 'childList' && m.removedNodes && m.removedNodes.length) {
+          if (window.__a11Live && !window.__a11Live.isConnected) window.__a11.removed += m.removedNodes.length;
+        }
+      }
+    });
+    window.__a11Obs.observe(cc, { childList: true, subtree: true });
+    return { len0: window.__a11Text0.length, ccText0: window.__a11.ccText0, frames0: window.__a11.frames0 };
+  });
+}
+
 // ─────────────────────────── 用例 ───────────────────────────
 
 async function main() {
@@ -439,7 +612,8 @@ async function main() {
       await page.screenshot({ path: beforeShot });
 
       // 注入上游认领信号：一帧 prompt-claimed（文本与槽内 prompt 归一化相等）
-      await attach.inject(sseFrame('prompt-claimed', { text: TEXT_A6 }));
+      // 真实 attach 流形态：回放 burst 结束（replay_end）之后的实时帧才可清槽
+      await attach.inject(sseFrame('replay_end', { total: 0 }) + sseFrame('prompt-claimed', { text: TEXT_A6 }));
 
       const after = await waitDockHidden(page);
       const bubblesAfter = await countUserBubbles(page, TEXT_A6);
@@ -497,7 +671,8 @@ async function main() {
 
       // 三帧对抗输入：空文本 / 畸形 JSON / 其它会话文本
       await attach.inject(
-        sseFrame('prompt-claimed', { text: '' })
+        sseFrame('replay_end', { total: 0 })
+          + sseFrame('prompt-claimed', { text: '' })
           + sseFrame('prompt-claimed', '{this is not valid json}')
           + sseFrame('prompt-claimed', { text: TEXT_A7_OTHER }),
       );
@@ -516,6 +691,279 @@ async function main() {
       assertEqual(after.slot, true, 'A7 当前会话排队槽必须保留（不得被畸形/跨会话 claimed 清掉）');
       assertEqual(before.display, 'block', 'A7 前置条件：注入前 #queue-dock 必须已显示');
       return 'consoleErrors=0 截图=' + path.basename(shot);
+    } finally {
+      if (context) { try { await context.close(); } catch { /* 已关闭 */ } }
+      await fx.srv.stop();
+    }
+  });
+
+  // ── A8（L3-A 回归）：陈旧 waiting 必须被 /api/sessions/status 补丁清除 ──
+  await runner.run('A8 陈旧 pendingInteraction 被 running 状态补丁清除（wait-dot → run-dot，不发散为停止键）+ Console Error=0 + 截图', async () => {
+    const browser = await getBrowser();
+    const fx = await startFixture([SID_A8]);
+    let context = null;
+    try {
+      await seedSession(fx.srv.base, { cwd: fx.cwd, sessionId: SID_A8, prompt: 'A8 陈旧等待态会话种子' });
+      let poison = true; // 首屏快照含 pendingInteraction；随后“变陈旧”（不再注入）
+      const app = await openApp(browser, fx.srv, fx.cwd, SID_A8, async (page) => {
+        await overrideSessionsRowDynamic(page, SID_A8, () => (poison
+          ? { id: SID_A8, title: 'wait', state: 'running', isRunning: true, pendingInteraction: 'question' }
+          : { id: SID_A8, title: 'wait', state: 'running', isRunning: true }));
+        await overrideStatusRunning(page); // 权威补丁：running 且无 pendingInteraction
+      });
+      context = app.context;
+      const page = app.page;
+
+      await page.keyboard.press('w');
+      await page.waitForSelector('#ws-tree .tree-ws', { timeout: 15000 });
+      await page.click('#ws-tree .tree-ws');
+      const initialWait = await waitRowDot(page, '.wait-dot', 'wait', 15000);
+      const initial = await readSessRow(page, 'wait');
+      // 关键隔离：快照持续保持“陈旧”（每次 /api/sessions 仍带 pendingInteraction），
+      // 因此行变为 run-dot 只可能来自 /api/sessions/status 状态补丁，而非列表重取换行。
+      const cleared = await waitRowDot(page, '.run-dot', 'wait', 9000);
+      poison = false; // 已观测到收敛后放开注入，避免下一轮重取再次毒化导致末态抖动
+      const final = await readSessRow(page, 'wait');
+      const shot = path.join(ARTIFACT_DIR, 'a8-stale-waiting-cleared.png');
+      await page.screenshot({ path: shot });
+
+      console.log('  (A8 观测: ' + JSON.stringify({
+        首屏waitDot: initial.hasWait, 补丁后runDot: final.hasRun, 补丁后waitDot: final.hasWait, 补丁后stopDot: final.hasStop,
+      }) + ')');
+      assertEqual(initial.hasWait, true, 'A8 前置（C-3 契约）：注入 pendingInteraction 行必须首屏渲染 wait-dot');
+      assertEqual(cleared, true, 'A8 陈旧 waiting 必须被 running 状态补丁清除（row 出现 .run-dot）');
+      assertEqual(final.hasRun, true, 'A8 状态补丁后该行必须渲染蓝 ●（.run-dot）');
+      assertEqual(final.hasWait, false, 'A8 状态补丁后不得残留 .wait-dot（陈旧 pendingInteraction 必须被清除）');
+      assertEqual(final.hasStop, false, 'A8 状态补丁后不得发散为停止键（.stop-dot）');
+      assertEqual(final.hasErr, false, 'A8 状态补丁后不得发散为错误键（.err-dot）');
+      assertEqual(app.errors.length, 0, 'A8 浏览器 Console Error 数必须为 0');
+      assertOk(fs.existsSync(shot), 'A8 截图必须落盘', redact(shot), '(missing)');
+      return 'runDot=' + final.hasRun + ' 截图=' + path.basename(shot);
+    } finally {
+      if (context) { try { await context.close(); } catch { /* 已关闭 */ } }
+      await fx.srv.stop();
+    }
+  });
+
+  // ── A9（L3-A 回归）：历史含同文本旧轮次不得误判“已消费” ──
+  await runner.run('A9 历史旧轮次同文本不得误判已消费（宿主未认领时排队槽必须保留）+ Console Error=0 + 截图', async () => {
+    const browser = await getBrowser();
+    const fx = await startFixture([SID_A9]);
+    let context = null;
+    try {
+      // 旧轮次历史文本 X 与稍后登记的排队槽文本完全相同；宿主从未认领（attach 全程挂起，无 claimed 帧）
+      await seedSession(fx.srv.base, { cwd: fx.cwd, sessionId: SID_A9, prompt: TEXT_A9 });
+      await seedSession(fx.srv.base, { cwd: fx.cwd, sessionId: SID_A9_OTHER, prompt: TEXT_A9_OTHER });
+
+      let attach = null;
+      const app = await openApp(browser, fx.srv, fx.cwd, SID_A9, async (page) => {
+        attach = await holdAttach(page);
+      });
+      context = app.context;
+      const page = app.page;
+
+      await selectSessionBySid(page, SID_A9);
+      await waitChatBubble(page, TEXT_A9);
+      await attach.waitHeld(1);
+      await sendQueuedPrompt(page, TEXT_A9);
+      const queued = await readDock(page);
+
+      await selectSessionBySid(page, SID_A9_OTHER);
+      await selectSessionBySid(page, SID_A9);
+      await waitChatBubble(page, TEXT_A9);
+      const back = await readDock(page);
+      const bubbles = await countUserBubbles(page, TEXT_A9);
+      const shot = path.join(ARTIFACT_DIR, 'a9-duplicate-prompt-slot.png');
+      await page.screenshot({ path: shot });
+
+      console.log('  (A9 观测: ' + JSON.stringify({
+        追发后停靠条: queued.display, 切回后停靠条: back.display, 切回后槽存在: back.slot, 历史气泡数: bubbles,
+      }) + ')');
+      assertEqual(queued.display, 'block', 'A9 前置条件：queue 追发后 #queue-dock 必须可见');
+      assertEqual(back.display, 'block', 'A9 历史含旧轮次同文本不得误判已消费：切回后 #queue-dock 必须仍显示');
+      assertOk(back.text.indexOf(TEXT_A9) >= 0, 'A9 停靠条必须仍显示排队文本', '含「' + TEXT_A9 + '」', back.text);
+      assertEqual(back.slot, true, 'A9 排队槽必须保留（不得被历史同文本误清）');
+      assertEqual(bubbles, 1, 'A9 历史用户气泡只应 1 条（不得重复追加）');
+      assertEqual(app.errors.length, 0, 'A9 浏览器 Console Error 数必须为 0');
+      assertOk(fs.existsSync(shot), 'A9 截图必须落盘', redact(shot), '(missing)');
+      return '槽保留=' + back.slot + ' 截图=' + path.basename(shot);
+    } finally {
+      if (context) { try { await context.close(); } catch { /* 已关闭 */ } }
+      await fx.srv.stop();
+    }
+  });
+
+  // ── A10（L3-A 回归）：replay_end 之前的旧 claimed 帧不得清槽 ──
+  await runner.run('A10 重放门控：replay_end 之前的 prompt-claimed 不得清槽，之后的实时帧才清槽 + Console Error=0 + 截图', async () => {
+    const browser = await getBrowser();
+    const fx = await startFixture([SID_A10]);
+    let context = null;
+    try {
+      await seedSession(fx.srv.base, { cwd: fx.cwd, sessionId: SID_A10, prompt: 'A10 历史种子轮次' });
+
+      let attach = null;
+      const app = await openApp(browser, fx.srv, fx.cwd, SID_A10, async (page) => {
+        attach = await holdAttach(page);
+      });
+      context = app.context;
+      const page = app.page;
+
+      await selectSessionBySid(page, SID_A10);
+      await waitChatBubble(page, 'A10 历史种子轮次');
+      await attach.waitHeld(1);
+      await sendQueuedPrompt(page, TEXT_A10);
+      const before = await readDock(page);
+
+      // 第 1 段：回放 burst 内（replay_end 之前）注入与槽匹配的旧 claimed 帧
+      await attach.inject(sseFrame('prompt-claimed', { text: TEXT_A10 }) + sseFrame('replay_end', { total: 0 }));
+      await waitAttachDrained(page);
+      const gated = await readDock(page);
+      const shot = path.join(ARTIFACT_DIR, 'a10-replay-gate.png');
+      await page.screenshot({ path: shot });
+
+      // 第 2 段：重连挂载后，replay_end 之后的实时 claimed 帧（此时才允许清槽）
+      await triggerReattach(page);
+      await attach.waitHeld(2);
+      await attach.inject(sseFrame('replay_end', { total: 0 }) + sseFrame('prompt-claimed', { text: TEXT_A10 }));
+      await waitAttachDrained(page);
+      const live = await readDock(page);
+
+      console.log('  (A10 观测: ' + JSON.stringify({
+        注入前停靠条: before.display, replay_end前claimed后停靠条: gated.display, replay_end前claimed后槽存在: gated.slot,
+        实时claimed后停靠条: live.display,
+      }) + ')');
+      assertEqual(before.display, 'block', 'A10 前置条件：queue 追发后 #queue-dock 必须可见');
+      assertEqual(gated.display, 'block', 'A10 replay_end 之前的旧 prompt-claimed 不得清槽（回放门控）');
+      assertEqual(gated.slot, true, 'A10 回放阶段的旧 claimed 不得清掉排队槽');
+      assertEqual(live.display, 'none', 'A10 replay_end 之后的实时 prompt-claimed 必须清槽（停靠条隐藏）');
+      assertEqual(app.errors.length, 0, 'A10 浏览器 Console Error 数必须为 0');
+      return 'gated=block live=' + live.display + ' 截图=' + path.basename(shot);
+    } finally {
+      if (context) { try { await context.close(); } catch { /* 已关闭 */ } }
+      await fx.srv.stop();
+    }
+  });
+
+  // ── A11（L3-A2 回归）：流式在途期间的 F5 兜底探测不得破坏在途回答 ──
+  await runner.run('A11 流式在途跨 5s 兜底探测：回答节点不被清空/替换、delta 继续、气泡不重复、终态完整 + Console Error=0 + 截图', async () => {
+    const browser = await getBrowser();
+    const fx = await startFixture([]); // 会话非运行态：走正常发送推流路径
+    let context = null;
+    try {
+      await seedSession(fx.srv.base, { cwd: fx.cwd, sessionId: SID_A11, prompt: 'A11 历史种子轮次' });
+
+      const tokens = [];
+      for (let i = 0; i < 18; i += 1) tokens.push('A11段' + i + '；');
+      const fullText = tokens.join('');
+      const steps = [
+        { delay: 100, frame: sseFrame('start', { sessionId: SID_A11, provider: 'ponyllm', model: 'glm-5.3-flash' }) },
+        { delay: 160, frame: sseFrame('replay_end', { total: 0 }) },
+      ];
+      for (let i = 0; i < tokens.length; i += 1) {
+        steps.push({ delay: 300 + i * 430, frame: sseFrame('delta', { text: tokens[i] }) });
+      }
+      steps.push({ delay: 8300, frame: sseFrame('done', { finalResponse: fullText }), terminal: true });
+
+      const app = await openApp(browser, fx.srv, fx.cwd, SID_A11, async (page) => {
+        // 追发回执桩：仅替换 POST /api/session/prompt 的 ok 回执（真实 UI 追发路径保持完整）
+        await page.route(/\/api\/session\/prompt(\?|$)/, async (route) => {
+          if (route.request().method() !== 'POST') { try { await route.continue(); } catch { /* 已关闭 */ } return; }
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, itemId: 'a11-item' }) });
+        });
+      }, { fn: streamStubInit, arg: { steps: steps } });
+      context = app.context;
+      const page = app.page;
+
+      await selectSessionBySid(page, SID_A11);
+      await waitChatBubble(page, 'A11 历史种子轮次');
+
+      // 1) 正常发送 → 页面级 SSE 桩分段放行（真实 readyState 3 增量）
+      const composerOpen = await page.evaluate(() => {
+        const p = document.getElementById('composer-panel');
+        return !!p && p.style.display === 'block';
+      });
+      if (!composerOpen) await page.click('#composer-trigger-btn');
+      await page.fill('#input-box', TEXT_A11_SEND);
+      await page.press('#input-box', 'Enter');
+      await waitFor(() => page.evaluate(() => {
+        const nodes = document.querySelectorAll('#chat-container .msg-assistant');
+        return nodes.length > 0 && (nodes[nodes.length - 1].textContent || '').length > 0;
+      }), { timeoutMs: 12000, label: '首个 delta 渲染出 assistant 气泡' });
+      const armed = await armStreamWatcher(page);
+
+      // 2) 流式在途期间真实 UI 追发 → 登记排队槽，触发 F5/R1 兜底探测定时器
+      await sendQueuedPrompt(page, TEXT_A11_QUEUE);
+      await page.evaluate(() => {
+        window.__a11.regAt = Date.now();
+        window.__a11.histBefore = window.__a11.histFetches;
+        window.__a11.framesBefore = window.__a11.frames;
+      });
+
+      // 3) 越过 5s 兜底探测窗口（≥6.4s），全程流式在途
+      await waitFor(() => page.evaluate(() => Date.now() - window.__a11.regAt >= 6400),
+        { timeoutMs: 14000, intervalMs: 200, label: '越过 5s 兜底探测窗口（流式在途）' });
+      const snap = await page.evaluate(() => {
+        const nodes = document.querySelectorAll('#chat-container .msg-assistant');
+        const last = nodes.length ? nodes[nodes.length - 1] : null;
+        return {
+          liveConnected: !!(window.__a11Live && window.__a11Live.isConnected),
+          liveLen: window.__a11Live ? (window.__a11Live.textContent || '').length : -1,
+          len0: window.__a11Text0.length,
+          removed: window.__a11.removed,
+          minChildren: window.__a11.minChildren,
+          ccLen: (function () {
+            const cc = document.getElementById('chat-container');
+            return cc ? (cc.textContent || '').length : -1;
+          })(),
+          ccText0: window.__a11.ccText0,
+          histDelta: window.__a11.histFetches - window.__a11.histBefore,
+          framesDelta: window.__a11.frames - window.__a11.framesBefore,
+          lastLen: last ? (last.textContent || '').length : -1,
+          streaming: (typeof isStreaming !== 'undefined') ? !!isStreaming : null,
+        };
+      });
+      const bubblesDuring = await countUserBubbles(page, TEXT_A11_SEND);
+      const shotDuring = path.join(ARTIFACT_DIR, 'a11-stream-during-poll.png');
+      await page.screenshot({ path: shotDuring });
+
+      // 4) 放行 done（桩时间线终态），断言最终文本完整 + 停靠条收口
+      await waitFor(() => page.evaluate(() => (typeof isStreaming !== 'undefined') && !isStreaming),
+        { timeoutMs: 16000, intervalMs: 150, label: '流式终态（done 帧处理完成）' });
+      const finalSnap = await page.evaluate(() => {
+        const chat = document.getElementById('chat-container');
+        const dock = document.getElementById('queue-dock');
+        return { chatText: chat ? (chat.textContent || '') : '', dock: dock ? dock.style.display : null };
+      });
+      const bubblesFinal = await countUserBubbles(page, TEXT_A11_SEND);
+      const missingTokens = tokens.filter((t) => finalSnap.chatText.indexOf(t) < 0);
+      const shotDone = path.join(ARTIFACT_DIR, 'a11-stream-done.png');
+      await page.screenshot({ path: shotDone });
+
+      console.log('  (A11 观测: ' + JSON.stringify({
+        流式在途: snap.streaming, 探测次数: snap.histDelta, 期间新增帧: snap.framesDelta,
+        在途节点存活: snap.liveConnected, 被移除节点数: snap.removed, 容器最少子节点: snap.minChildren,
+        文本长度: {'观测前': snap.ccText0, '观测点': snap.ccLen, '最终': finalSnap.chatText.length},
+        在途气泡文本: {'观测前': snap.len0, '观测点': snap.liveLen},
+        用户气泡数: {'期间': bubblesDuring, '终态': bubblesFinal}, 缺失片段数: missingTokens.length,
+        终态停靠条: finalSnap.dock,
+      }) + ')');
+
+      assertEqual(snap.streaming, true, 'A11 前置条件：观测点必须仍处流式在途（跨 5s 窗口后才放行 done）');
+      assertOk(snap.histDelta >= 1, 'A11 前置条件：兜底探测必须在本窗口内真实触发（GET /api/history 次数）', '≥ 1', snap.histDelta);
+      assertEqual(snap.liveConnected, true, 'A11 兜底探测不得清空/替换在途回答节点（原 assistant 气泡必须仍在文档中）');
+      assertEqual(snap.removed, 0, 'A11 MutationObserver 不得观测到在途回答节点被移除');
+      assertOk(snap.framesDelta >= 8, 'A11 探测期间 delta 后续帧必须继续到达（回放不得中断推流）', '≥ 8', snap.framesDelta);
+      assertOk(snap.ccLen > snap.ccText0, 'A11 在途回答文本必须继续增长（不得被历史快照整体替换）',
+        '> ' + snap.ccText0, snap.ccLen);
+      assertOk(snap.minChildren > 0, 'A11 #chat-container 不得被整体清空', '> 0', snap.minChildren);
+      assertEqual(bubblesDuring, 1, 'A11 流式期间用户气泡不得重复');
+      assertEqual(missingTokens.length, 0, 'A11 终态回答必须完整（18 个 delta 片段全部落屏）');
+      assertEqual(bubblesFinal, 1, 'A11 终态用户气泡不得重复');
+      assertEqual(finalSnap.dock, 'none', 'A11 终态停靠条必须收口隐藏（排队槽在 done 后失效）');
+      assertEqual(app.errors.length, 0, 'A11 浏览器 Console Error 数必须为 0');
+      assertOk(fs.existsSync(shotDuring) && fs.existsSync(shotDone), 'A11 截图必须落盘',
+        redact(shotDuring) + ' / ' + redact(shotDone), '(missing)');
+      return '在途节点存活=' + snap.liveConnected + ' 期间帧=' + snap.framesDelta + ' 缺失片段=' + missingTokens.length;
     } finally {
       if (context) { try { await context.close(); } catch { /* 已关闭 */ } }
       await fx.srv.stop();

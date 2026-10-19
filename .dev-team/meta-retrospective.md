@@ -200,3 +200,30 @@
 - B 级波次的审查结果必须落盘 `.dev-team/review-<id>.json` 并由 Lead `jq -e` 校验，**不依赖 Subagent 消息回流**（本次教训）。
 - 对「消费者契约扩展」类波次，验收矩阵应默认包含一条「真实宿主在线」用例（本次由 Lead 手工补做）；建议把 `suite-host.mjs` 的 DEGRADED 机制扩展为可容纳目录/档位断言。
 - 冻结套件新增第 5 个 suite 后，`run-all.mjs` 成为 4 套件入口；后续波次注意别把 suite 数量当契约（SUITES 数组是唯一真源）。
+
+---
+
+# Meta Retrospective — 排队态滞留 / 等待作答状态错标（2026-10-19，B 级 Agent Team）
+
+## 一、通信拓扑与信噪比
+- 拓扑：Lead + protocol-agent(空桩) + test-core(A1-A4) + test-browser(A5-A7/A8-A10) + exec-server + exec-web + 2 路 L3（Subagent 池，不占常驻槽位）+ 2 个只读 Explorer（E2）。
+- **有效动作**：两个 Explorer 分别产出 D-1（排队槽清槽调用点全清单）与 D-2（waiting 状态链路 + 上游语义）的 path:line 事实，Lead 只需抽验 1 条即采信，避免通读 60 万字节前端文件。
+- **噪声/失败**：首个 test-agent 同时承担「探索 + 写 500 行浏览器套件」上下文耗尽，产出 0 文件；其被后续消息唤醒后还越权生成合并套件 `tests/acceptance/suite-statusqueue.mjs`（未被 run-all 引用），Lead interrupt 后删除。改为 narrow-slice 双 test agent 后一次成功。
+
+## 二、门禁穿透与误杀率
+- **红相真实**：core 4 例 + browser 3 例实现前全部断言失败（`artifacts/red-statusqueue-*.log`），并带前置条件断言防空洞通过（A3 先证明进入 waiting；A2 先证明服务端读到合成转录）。
+- **L3 对抗收益**：L3-A 首轮 FAIL 5 findings，其中 3 条是红相套件覆盖不到的真实缺陷（陈旧 pendingInteraction 不清除 → 误显示停止键；重复 prompt 被旧气泡误判已消费；attach 回放帧误清新槽）。A9 回归护栏在修复前真实红（`期望 block 实际 none`）。
+- **误杀/超纲**：finding 5（turn/end 关流导致认领帧难送达）诊断正确但处方不同——未改上游协议，用前端兜底轮询补足，未计误杀。L3-B PASS 0 findings，独立复核 ES5/XSS/缓存边界。
+- **假绿防护**：A7/A10 为不变量型用例，实现前即 PASS，明确标注「不变量提前通过，不计实现完成」。
+
+## 三、分工契约与隔离有效性
+- 写域正交：server（`server.mjs`+`lib/session-waiting.mjs`）与 web（`static/index.html`+`lib/session-events.mjs`）并行，两次波次内零文件竞争；Lead 为唯一 git 写主，红相锚定 commit `6a39e48` 先于实现落地。
+- **偏差（已记录 state.json）**：Protocol 空桩未单独物理提交即被 Executor 填充（T1 完成与 T3a 启动间隔过短），以协议收据 `receipts/t1-session-waiting-stub-2026-10-19.log` 保留纯度证据（AST 门禁证明 0 业务逻辑）。
+- 契约演进纪律：L3 复审后以 A8-A10 回归护栏追加，未改已冻结 A1-A7；Executor 全程未改 `tests/`。
+
+## 四、元协议迭代建议（Self-Evolving Protocol）
+1. **失败成员显式退役**：上下文耗尽/空产出的 Teammate 必须在任务板标 failed 并由 Lead 立即 interrupt + 标记不可复用，防止其被后续消息唤醒后越权写文件。
+2. **测试委派切片上限**：单套件 ≤250 行、单次只碰 1 个测试文件；超过即拆 core/browser 两名成员（本次已验证有效）。
+3. **Explorer 模板化**：默认携带「禁止通读大文件 + 已知函数名/行号区间 + path:line 事实契约 + [UNVERIFIED] 标注」四项约束。
+4. **L3 复审前置 delta 对照表**：复审任务应显式附「首轮 findings → 修复行号」对照，减少复审员重新定位成本。
+5. **空桩→Executor 强制检查点**：把「Protocol 提交空桩」设为解锁 Executor 的硬闸，杜绝本次的时序偏差。

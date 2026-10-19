@@ -207,6 +207,59 @@
     "restarted": "2026-10-18T13:2x+08:00",
     "verified": "/healthz ok, catalog 26/4 reasoning, browser E2E badge ' · Low'"
    }
+  },
+  {
+   "wave": 4,
+   "branch": "statusqueue-waiting-2026-10-19",
+   "date": "2026-10-19",
+   "grade": "B",
+   "grade_triggers": [
+    "state-machine: 会话状态机 waiting/running + 排队槽生命周期",
+    "external-io: 宿主 RPC session/list + SSE follow 流",
+    "multi-file: server.mjs + lib/session-waiting.mjs + lib/session-events.mjs + static/index.html + tests/acceptance/"
+   ],
+   "tasks": [
+    "task-1 (T1 protocol stub)",
+    "task-2 (T2a core tests)",
+    "task-4 (T2b browser tests)",
+    "task-5 (T3a server)",
+    "task-6 (T3b web)"
+   ],
+   "baseline_commit": "1905c14",
+   "red_commit": "6a39e48",
+   "red_tag": "wave-2026-10-19-red",
+   "contract": ".dev-team/contract-wave-2026-10-19.md",
+   "status": "in_progress",
+   "quarantine": null,
+   "nfr_degraded": [],
+   "write_scopes": {
+    "task-1": [
+     "lib/session-waiting.mjs",
+     ".dev-team/"
+    ],
+    "task-2": [
+     "tests/acceptance/"
+    ],
+    "task-4": [
+     "tests/acceptance/"
+    ],
+    "task-5": [
+     "server.mjs",
+     "lib/session-waiting.mjs"
+    ],
+    "task-6": [
+     "static/index.html",
+     "lib/session-events.mjs"
+    ]
+   },
+   "root_cause": "R1 排队槽清槽仅绑定终态/快照 running=false，无 prompt 认领信号且恢复路径无条件复活 → 已执行仍显示排队；R2 服务端状态集无 waiting、宿主 list 无 pendingInteraction → 等待作答会话恒显蓝色 running",
+   "deviations": [
+    "Protocol 空桩未单独物理提交（T1 完成后直接由 T3a 实现），已由 .dev-team/receipts/t1-session-waiting-stub-2026-10-19.log 提供纯度收据；红相锚定测试先于实现落盘（core 红相日志 08:49 < server 实现 08:53）"
+   ],
+   "counters": {
+    "L2T_fail": 0,
+    "L2AT_fail": 0
+   }
   }
  ]
 }

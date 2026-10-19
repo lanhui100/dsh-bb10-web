@@ -1,0 +1,32 @@
+(node:3745601) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+# Q20 验收套件 STATUSQUEUE-BROWSER (A5/A6/A7 真实页面) — 时间: 2026-10-19T01:55:31.375Z
+▶ [STATUSQUEUE-BROWSER] A5 列表行 pendingInteraction=question 渲染 wait-dot（?）且无 run-dot + Console Error=0 + 截图
+  (chromium: playwright default)
+  ✔ PASS [1464.13ms] A5 列表行 pendingInteraction=question 渲染 wait-dot（?）且无 run-dot + Console Error=0 + 截图 — row=? wait 10/19 consoleErrors=0 截图=a5-pending-interaction.png
+▶ [STATUSQUEUE-BROWSER] A6 prompt-claimed 匹配清槽 + 不重复用户气泡 + 历史已含文本切回不复活 + Console Error=0
+  (A6 观测: {"僵尸槽登记":true,"claimed后停靠条":"none","claimed后槽存在":false,"claimed后气泡数":1,"切回后停靠条":"none","切回后气泡数":1})
+  ✔ PASS [25176.07ms] A6 prompt-claimed 匹配清槽 + 不重复用户气泡 + 历史已含文本切回不复活 + Console Error=0 — bubbles=1 consoleErrors=0 截图=a6-queue-claimed.png
+▶ [STATUSQUEUE-BROWSER] A7 空文本+畸形 JSON+跨会话 prompt-claimed：不抛异常、Console Error=0、当前槽不被误清
+  ✔ PASS [20601.23ms] A7 空文本+畸形 JSON+跨会话 prompt-claimed：不抛异常、Console Error=0、当前槽不被误清 — consoleErrors=0 截图=a7-claimed-adversarial.png
+▶ [STATUSQUEUE-BROWSER] A8 陈旧 pendingInteraction 被 running 状态补丁清除（wait-dot → run-dot，不发散为停止键）+ Console Error=0 + 截图
+  (A8 观测: {"首屏waitDot":true,"补丁后runDot":true,"补丁后waitDot":false,"补丁后stopDot":false})
+  ✔ PASS [5474.12ms] A8 陈旧 pendingInteraction 被 running 状态补丁清除（wait-dot → run-dot，不发散为停止键）+ Console Error=0 + 截图 — runDot=true 截图=a8-stale-waiting-cleared.png
+▶ [STATUSQUEUE-BROWSER] A9 历史旧轮次同文本不得误判已消费（宿主未认领时排队槽必须保留）+ Console Error=0 + 截图
+  (A9 观测: {"追发后停靠条":"block","切回后停靠条":"none","切回后槽存在":false,"历史气泡数":1})
+  ✖ FAIL [25073.29ms] A9 历史旧轮次同文本不得误判已消费（宿主未认领时排队槽必须保留）+ Console Error=0 + 截图
+      断言失败: A9 历史含旧轮次同文本不得误判已消费：切回后 #queue-dock 必须仍显示 → 期望: block；实际: none
+▶ [STATUSQUEUE-BROWSER] A10 重放门控：replay_end 之前的 prompt-claimed 不得清槽，之后的实时帧才清槽 + Console Error=0 + 截图
+  (A10 观测: {"注入前停靠条":"block","replay_end前claimed后停靠条":"block","replay_end前claimed后槽存在":true,"实时claimed后停靠条":"none"})
+  ✔ PASS [20702.81ms] A10 重放门控：replay_end 之前的 prompt-claimed 不得清槽，之后的实时帧才清槽 + Console Error=0 + 截图 — gated=block live=none 截图=a10-replay-gate.png
+
+──────── STATUSQUEUE-BROWSER 报告 ────────
+✔ PASS [1464.13ms] A5 列表行 pendingInteraction=question 渲染 wait-dot（?）且无 run-dot + Console Error=0 + 截图
+✔ PASS [25176.07ms] A6 prompt-claimed 匹配清槽 + 不重复用户气泡 + 历史已含文本切回不复活 + Console Error=0
+✔ PASS [20601.23ms] A7 空文本+畸形 JSON+跨会话 prompt-claimed：不抛异常、Console Error=0、当前槽不被误清
+✔ PASS [5474.12ms] A8 陈旧 pendingInteraction 被 running 状态补丁清除（wait-dot → run-dot，不发散为停止键）+ Console Error=0 + 截图
+✖ FAIL [25073.29ms] A9 历史旧轮次同文本不得误判已消费（宿主未认领时排队槽必须保留）+ Console Error=0 + 截图
+        A9 历史含旧轮次同文本不得误判已消费：切回后 #queue-dock 必须仍显示 → 期望: block；实际: none
+✔ PASS [20702.81ms] A10 重放门控：replay_end 之前的 prompt-claimed 不得清槽，之后的实时帧才清槽 + Console Error=0 + 截图
+合计: 6 用例, PASS 5, FAIL 1, SKIP(degraded) 0
+SUITE-STATUSQUEUE-BROWSER SUMMARY: total=6 pass=5 fail=1 degraded=0
