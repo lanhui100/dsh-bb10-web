@@ -281,6 +281,61 @@
     "live_sessions": "running 行 state=running 无 pendingInteraction",
     "live_browser": "720x720 console errors=0"
    }
+  },
+  {
+   "wave": 5,
+   "branch": "banner-suppress-in-session-detail-2026-10-19",
+   "date": "2026-10-19",
+   "grade": "A",
+   "grade_triggers": [
+    "single-file: static/index.html 单 hunk +3/-14",
+    "no external io / no concurrency primitives / no schema or protocol change",
+    "contract inversion: red-phase test anchored 477c64a"
+   ],
+   "tasks": [
+    "task-1 (T1 test contract, lead)",
+    "task-2 (T2 impl, executor-web)",
+    "task-3 (T3 independent review, subagent)"
+   ],
+   "baseline_commit": "d1a478d",
+   "red_commit": "477c64a",
+   "green_commit": "672ebd6",
+   "status": "completed",
+   "quarantine": null,
+   "nfr_degraded": [],
+   "contract": "会话状态横幅在 sid===currentSessionId 时一律抑制（含浮层覆盖）",
+   "write_scopes": {
+    "task-1": [
+     "test-unit.mjs"
+    ],
+    "task-2": [
+     "static/index.html"
+    ],
+    "task-3": [
+     ".dev-team/review-banner-suppress.json"
+    ]
+   },
+   "counters": {
+    "L2T_fail": 1,
+    "L2AT_fail": 0,
+    "review_rounds": 1,
+    "reviews": {
+     "L3": {
+      "verdict": "PASS",
+      "findings": 0
+     }
+    }
+   },
+   "gates": {
+    "es5": "PASS",
+    "decoupling": 0,
+    "unit": "35/35",
+    "e2e": "7/7",
+    "adr_lint": 0,
+    "red_old_impl": "Exit 1 (as expected)",
+    "browser": "720x720 console errors=0; suppression + other-session notify verified live"
+   },
+   "closed_at": "2026-10-19T23:30:00+08:00"
   }
  ]
 }

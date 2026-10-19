@@ -227,3 +227,35 @@
 3. **Explorer 模板化**：默认携带「禁止通读大文件 + 已知函数名/行号区间 + path:line 事实契约 + [UNVERIFIED] 标注」四项约束。
 4. **L3 复审前置 delta 对照表**：复审任务应显式附「首轮 findings → 修复行号」对照，减少复审员重新定位成本。
 5. **空桩→Executor 强制检查点**：把「Protocol 提交空桩」设为解锁 Executor 的硬闸，杜绝本次的时序偏差。
+
+---
+
+# Meta Retrospective — 会话详情界面状态横幅抑制（wave-2026-10-19-banner）
+
+- 波次：`wave-2026-10-19-banner`（A 级：单文件单 hunk +3/-14；无外部 IO、无并发原语、无 schema/协议变更）
+- 名册：Lead（契约冻结 + 红相测试 + 门禁裁决）+ `executor-web`（实施）+ Subagent 池（1 路独立 L3 审查，不占槽位）
+- 红相锚定 `477c64a` → 绿相 `672ebd6`；审查 `.dev-team/review-banner-suppress.json`（PASS / 0 findings）
+
+## 一、通信拓扑与信噪比（Topology & Noise）
+
+- **生效**：契约 C1 用一段可执行断言 + 4 条正/反向断言下发，Executor 无需通读 14314 行 `index.html`，只需 `grep` 定位函数并读局部区间；回执强制"命令原文 + 真实 Exit Code"，杜绝幻觉。
+- **生效**：Executor 主动上报"工单写 13 项、实际 35 项"与 diff 行数偏差，说明回执条款压住了套模板式汇报。
+- **噪声**：低。三方消息均为结论 + 物理凭据，无过程性套话。
+
+## 二、门禁穿透与误杀率（Gate Penetration / False Negatives & Positives）
+
+- **红相真实拦截**：`477c64a` 在旧实现上 `node test-unit.mjs` 真实 Exit 1（"Session detail view with overlay open must not produce done banner notification"），证明新断言非恒真、红相非造假。
+- **独立复核防假 PASS**：L3 审查者用 `git show HEAD:static/index.html` 内存复现旧实现泄漏（overlay-open done/error 均泄漏），并全仓 grep 确认无第二条状态横幅直插路径；与 Lead 结论一致，无双源冲突。
+- **机器门禁全绿**：Acorn ES5 PASS、`test-decoupling.mjs` 0、`test-unit.mjs` 35/35、`test-suite.mjs` 7/7、`verify-note.sh` 0。
+- **误杀率**：0（L3 PASS / 0 findings）；A 级未启用 L2-AT 破坏注入，依据已写入 `state.json` 供审计追溯。
+
+## 三、分工契约与隔离有效性（Contract Isolation）
+
+- **写域正交**：`test-unit.mjs`（Lead 冻结）/ `static/index.html`（Executor）/ review JSON（Subagent）零交叉；Executor 未触碰验收测试。
+- **最小闭包**：单一 hunk +3/-14，被删的 8 条浮层判定正是需求因果本体，无夹带重构、无格式化污染。
+- **契约演进**：旧 ADR `2026-09-18-banner-notification-user-summary-and-overlay-guard` 的"浮层覆盖仍通知"条款在同提交标注 Superseded by，避免状态轴失真。
+
+## 四、元协议迭代建议（Self-Evolving Protocol）
+
+- 同型 A 级任务可继续沿用"Lead 兼任测试 + 1 Executor + 1 路 Subagent 审查"轻量拓扑；但 Lead 同时编写契约测试与裁决绿相存在自证嫌疑，建议后续把契约测试下沉给独立 Test Agent（成本约 +1 次派生，换红相真实性双签）。
+- 纯逻辑 UI 变更的浏览器物理收据（720×720 截图 + console errors=0 + 静默/通知双向 `eval` 断言）成本极低、证明力强，建议固化为 A 级前端变更的标准动作。
