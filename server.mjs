@@ -12,6 +12,7 @@ import { createSessionEventHandler as createSessionEventHandlerImpl } from './li
 import { classifyQuestionFrame } from './lib/ask-ownership.mjs';
 import { hasPendingQuestionFromEvents } from './lib/session-waiting.mjs';
 import { applySubagentLite } from './lib/subagent-lite.mjs';
+import { mergeSubagentCatalog, pickAgentTeam } from './lib/agent-team-projection.mjs';
 import {
   extractEventUsage,
   createUsageFold,
@@ -270,6 +271,37 @@ function mockSeamSubagents() {
   }
 }
 
+/**
+ * §1.4 接缝：定向 `session/projections` 的返回值（JSON 对象：`{ "<sessionId>": values }`）。
+ * 仅供 U 面板「团队投影回源补齐」契约测试注入权威 agentTeam；生产路径绝不读取。
+ */
+function mockSeamProjections() {
+  const raw = process.env.Q20_MOCK_HOST_PROJECTIONS;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * §1.4 接缝：团队投影（JSON 对象：`{ "<sessionId>": { agentTeam, subagentCatalog?, staleLiveAgentTeam? } }`）。
+ * `agentTeam` 进 session/list 快照（更新的权威投影）；`staleLiveAgentTeam` 播种为 live 镜像冻结副本，
+ * 用于回归「冻结副本不得覆盖快照投影」。生产路径绝不读取。
+ */
+function mockSeamTeam() {
+  const raw = process.env.Q20_MOCK_HOST_TEAM;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 /** mock session/list items：内存注册表 + §1.4 接缝（running / SUBAGENTS）。 */
 function mockSessionListItems() {
   const runningIds = new Set(mockSeamRunningIds());
@@ -300,6 +332,28 @@ function mockSessionListItems() {
       cwd: sub.cwd || '',
       projections: { values: { title: sub.title || '', subagent: sub } },
     });
+  }
+  // 团队投影接缝：父会话的权威 agentTeam / subagentCatalog 并入快照 values。
+  for (const [sid, entry] of Object.entries(mockSeamTeam())) {
+    if (!entry || typeof entry !== 'object') continue;
+    let item = items.find((it) => it.sessionId === sid);
+    if (!item) {
+      item = {
+        sessionId: sid,
+        title: entry.title || '',
+        running: runningIds.has(sid),
+        state: runningIds.has(sid) ? 'running' : 'done',
+        projections: { values: { title: entry.title || '' } },
+      };
+      items.push(item);
+      seen.add(sid);
+    }
+    if (entry.agentTeam && typeof entry.agentTeam === 'object') {
+      item.projections.values.agentTeam = entry.agentTeam;
+    }
+    if (Array.isArray(entry.subagentCatalog)) {
+      item.projections.values.subagentCatalog = entry.subagentCatalog;
+    }
   }
   return items;
 }
@@ -343,6 +397,12 @@ function mockHandleRpc(method, request) {
     }
     case 'session/list': {
       return { ok: true, value: { items: mockSessionListItems() } };
+    }
+    case 'session/projections': {
+      const seam = mockSeamProjections();
+      const sid = (req && req.sessionId) ? String(req.sessionId) : '';
+      const values = (sid && seam[sid] && typeof seam[sid] === 'object') ? seam[sid] : {};
+      return { ok: true, value: { values } };
     }
     case 'session/modelCatalog': {
       // 契约 §5.4 接缝（仅 mock 分支读取，生产零影响）：
@@ -4943,10 +5003,15 @@ function mergeLiveSessionItems(items) {
     seen.add(key);
     const row = liveById.get(key);
     if (!row) { merged.push(item); continue; }
-    const values = Object.assign({}, (item.projections && item.projections.values) || {});
+    const snapshotValues = (item.projections && item.projections.values) || {};
+    const values = Object.assign({}, snapshotValues);
     if (row.title) values.title = row.title;
-    if (Array.isArray(row.subagentCatalog) && row.subagentCatalog.length) values.subagentCatalog = row.subagentCatalog;
-    if (row.agentTeam && typeof row.agentTeam === 'object') values.agentTeam = row.agentTeam;
+    // C-4 的 live 权威只覆盖 running 事实；agentTeam / subagentCatalog 是「某次快照的冻结副本」，
+    // 整体覆盖会让本次会话新增的队友、任务看板、后加的后台任务从 U 面板静默消失（2026-10-20 修）。
+    const catalog = mergeSubagentCatalog(snapshotValues.subagentCatalog, row.subagentCatalog);
+    if (catalog !== undefined) values.subagentCatalog = catalog;
+    const team = pickAgentTeam(snapshotValues.agentTeam, row.agentTeam);
+    if (team !== undefined) values.agentTeam = team;
     merged.push(Object.assign({}, item, {
       running: !!row.running,
       state: row.running ? 'running' : (item.state || 'done'),
@@ -5153,14 +5218,17 @@ async function getSessionSubagents(targetCwd, parentSessionId) {
   // 就对该单一 sid 做一次定向 session/projections 补全（单飞 + 15s 缓存；失败一律回落既有真源，绝不抛错）：
   //   ① 无全量快照（冷启动窗口）或快照已过期 —— 权威信息缺失；
   //   ② 既有真源未产出任何子会话/团队行（原条件）；
-  //   ③ children.length < catalog.length —— 快照/catalog 已知但行缺失（重启后仅 1 条 live 子会话即此情形）。
+  //   ③ children.length < catalog.length —— 快照/catalog 已知但行缺失（重启后仅 1 条 live 子会话即此情形）；
+  //   ④ 有子会话但两侧都无团队投影 —— 冻结的 live 副本或过期快照会让队友/任务看板整体缺失，
+  //      必须对父会话回源一次（2026-10-20：U 面板「队员 + 任务看板」消失的主因之一）。
   // 合并是**加性**的：applyProjectionsToItems 对已存在的 id 直接跳过，多执行一次不会产生重复行。
   const snapshotItems = peekHostSessionListFull();
   const snapshotUnusable = !Array.isArray(snapshotItems) || snapshotItems.length === 0
     || (Date.now() - hostSessionListFullCache.at > HOST_SNAPSHOT_MAX_AGE_MS);
   const coverageInsufficient = snapshotUnusable
     || (children.length === 0 && teamMembers.length === 0 && teamTasks.length === 0)
-    || (children.length < catalog.length);
+    || (children.length < catalog.length)
+    || (children.length > 0 && teamMembers.length === 0 && teamTasks.length === 0);
   if (coverageInsufficient) {
     const values = await fetchSessionProjections(effectiveParentId);
     if (values && applyProjectionsToItems(items, effectiveParentId, values)) {
@@ -7861,6 +7929,17 @@ function seedMockLiveTruth(state) {
       title: sub.title || '',
       updatedAt: Date.now(),
       projections: { values: { title: sub.title || '', subagent: sub } },
+    }]);
+  }
+  // 复现生产事实：live 镜像里的 agentTeam 是 api-session/added 帧的冻结副本（$events 不事件化
+  // 队友/任务变更），后续快照只填空缺（fillMissing）。此接缝让该冻结副本显式存在，供合并取舍回归。
+  for (const [sid, entry] of Object.entries(mockSeamTeam())) {
+    if (!entry || typeof entry !== 'object' || !entry.staleLiveAgentTeam) continue;
+    state.noteEvent('api-session/added', [{
+      sessionId: sid,
+      running: runningIds.indexOf(sid) >= 0,
+      updatedAt: Date.now(),
+      projections: { values: { title: entry.title || '', agentTeam: entry.staleLiveAgentTeam } },
     }]);
   }
 }

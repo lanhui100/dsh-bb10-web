@@ -2173,6 +2173,165 @@ async function main() {
       return { liteEnvelope: true, litePagedEnvelope: true, fullUnaffected: true };
     });
 
+    // 7d. U 面板团队投影新旧取舍（lib/agent-team-projection.mjs 纯函数门禁）
+    // 缺陷背景：live 镜像中的 agentTeam / subagentCatalog 只是某次快照的冻结副本，$events 只事件化
+    // running（C-4）；若整体覆盖快照投影，本次会话新增的队友、任务看板与后加的后台任务会静默消失。
+    await runner.run('U-panel team projection precedence (lib/agent-team-projection.mjs)', async () => {
+      const { pickAgentTeam, mergeSubagentCatalog } = await import('./lib/agent-team-projection.mjs');
+      const leadOnly = { members: [{ id: 'lead-1', name: 'lead', role: 'lead', phase: 'active' }], tasks: [] };
+      const fullTeam = {
+        members: [
+          { id: 'lead-1', name: 'lead', role: 'lead', phase: 'active' },
+          { id: 'tm-1', name: 'exec-a', role: 'teammate', phase: 'active' },
+          { id: 'tm-2', name: 'exec-b', role: 'teammate', phase: 'active' },
+        ],
+        tasks: [
+          { id: 'task-1', subject: '任务一', status: 'in_progress', ownerName: 'exec-a', revision: 1 },
+          { id: 'task-2', subject: '任务二', status: 'pending', ownerName: 'exec-b', revision: 1 },
+        ],
+      };
+      if (pickAgentTeam(fullTeam, leadOnly) !== fullTeam) {
+        throw new Error('frozen live agentTeam must never shadow the richer snapshot team projection');
+      }
+      const fresherLive = { members: fullTeam.members, tasks: fullTeam.tasks.concat([{ id: 'task-3', status: 'completed' }]) };
+      if (pickAgentTeam(fullTeam, fresherLive) !== fresherLive) {
+        throw new Error('richer live team (more tasks) must win when it genuinely carries more');
+      }
+      const sameTasksMoreMembers = { members: fullTeam.members.concat([{ id: 'tm-3', name: 'exec-c', role: 'teammate' }]), tasks: fullTeam.tasks };
+      if (pickAgentTeam(fullTeam, sameTasksMoreMembers) !== sameTasksMoreMembers) {
+        throw new Error('member-count tie-break must prefer the roster with more members');
+      }
+      if (pickAgentTeam(fullTeam, null) !== fullTeam) throw new Error('missing live team must keep snapshot team');
+      if (pickAgentTeam(null, leadOnly) !== leadOnly) throw new Error('snapshot without team must fall back to live team');
+      if (pickAgentTeam(null, null) !== undefined) throw new Error('no team on either side must stay undefined');
+      if (pickAgentTeam([], undefined) !== undefined) throw new Error('array must not be treated as an agentTeam object');
+
+      const snapCatalog = [{ id: 'c-1', mode: 'one-shot', label: '后台任务一' }, { id: 'c-2', mode: 'continuable', label: '子Agent二' }];
+      const frozenCatalog = [{ id: 'c-1', mode: 'one-shot', label: '后台任务一' }];
+      const mergedCat = mergeSubagentCatalog(snapCatalog, frozenCatalog);
+      if (!Array.isArray(mergedCat) || mergedCat.length !== 2 || mergedCat[0] !== snapCatalog[0] || mergedCat[1] !== snapCatalog[1]) {
+        throw new Error('catalog merge must keep every snapshot entry untouched');
+      }
+      const liveExtra = mergeSubagentCatalog(frozenCatalog, [{ id: 'c-1', label: '旧标签' }, { id: 'c-9', mode: 'one-shot', label: '后加后台任务' }]);
+      if (liveExtra.length !== 2 || liveExtra[0] !== frozenCatalog[0] || liveExtra[1].id !== 'c-9') {
+        throw new Error('catalog merge must append live-only ids without duplicating or overwriting snapshot entries');
+      }
+      if (mergeSubagentCatalog(null, null) !== undefined) throw new Error('no catalog on either side must stay undefined');
+      return { teamPrecedence: true, catalogUnion: true };
+    });
+
+    // 7e. U 面板团队看板回源补齐（C-21 ④）：有子会话但快照/live 都无团队投影时，
+    //     必须对父会话定向 session/projections 回源一次，队友与任务看板不得静默缺失。
+    await runner.run('U-panel team roster backfill via session/projections', async () => {
+      const subagentRow = {
+        sessionId: 'sa-bg-1',
+        parentSessionId: 'lead-team-1',
+        origin: 'subagent',
+        title: '后台任务一',
+        cwd: '/tmp/mock-ws',
+      };
+      const projections = {
+        'lead-team-1': {
+          agentTeam: {
+            members: [
+              { id: 'lead-team-1', name: 'lead', role: 'lead', phase: 'active' },
+              { id: 'tm-exec-1', name: 'exec-a', role: 'teammate', phase: 'active' },
+            ],
+            tasks: [
+              { id: 'task-1', subject: '任务一', status: 'in_progress', ownerName: 'exec-a', revision: 1 },
+            ],
+          },
+        },
+      };
+      const server = await startMockServer({
+        env: {
+          Q20_MOCK_HOST_SUBAGENTS: JSON.stringify([subagentRow]),
+          Q20_MOCK_HOST_PROJECTIONS: JSON.stringify(projections),
+        },
+      });
+      try {
+        const url = `/api/session/subagents?cwd=${encodeURIComponent(server.workspaceRoot)}&id=lead-team-1&lite=1`;
+        // 主通道快照是后台刷新的：连续三次请求打通「冷启动 → 快照就绪」窗口，
+        // 最后一次必须稳定命中队友与任务看板（修复前第三条恒为空）。
+        let last = null;
+        for (let i = 0; i < 3; i++) {
+          const res = await httpRequest(url, { base: server.base });
+          if (res.status !== 200 || !res.body) throw new Error(`Expected 200 subagents payload, got ${res.status}`);
+          last = res.body;
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        if (!Array.isArray(last.subagents) || last.subagents.length === 0) {
+          throw new Error('expected subagent rows from the mock snapshot');
+        }
+        const teammate = last.subagents.find((s) => s.id === 'tm-exec-1');
+        if (!teammate) throw new Error('teammate row missing: snapshot/live carried no team projection and no backfill ran');
+        if (teammate.role !== 'teammate' || teammate.mode !== 'team' || teammate.kind !== 'Agent Team') {
+          throw new Error(`teammate row must carry team badge fields, got ${JSON.stringify(teammate)}`);
+        }
+        if (!Array.isArray(last.tasks) || last.tasks.length !== 1 || last.tasks[0].id !== 'task-1') {
+          throw new Error(`team task board missing after backfill, got ${JSON.stringify(last.tasks)}`);
+        }
+        const child = last.subagents.find((s) => s.id === 'sa-bg-1');
+        if (!child || child.parentId !== 'lead-team-1') throw new Error('child subagent row must stay under the parent');
+        return { teammateBackfilled: true, taskBoardBackfilled: last.tasks.length };
+      } finally {
+        await server.stop();
+      }
+    });
+
+    // 7f. 冻结 live 副本不得遮蔽快照团队投影（U 面板队员/任务板消失的根因回归）
+    // 生产事实：会话创建时 api-session/added 帧带来的 agentTeam 只有 lead（tasks 为空），
+    // 之后 $events 不再事件化队友/任务，live 镜像 fillMissing 也不会刷新它；
+    // 旧合并逻辑整体用该冻结副本覆盖 session/list 的最新投影 → 新队友与新任务板全部消失。
+    await runner.run('Frozen live agentTeam must not shadow fresh snapshot team projection', async () => {
+      const parentId = 'lead-team-2';
+      const snapshotTeam = {
+        members: [
+          { id: parentId, name: 'lead', role: 'lead', phase: 'active' },
+          { id: 'tm-exec-2', name: 'exec-b', role: 'teammate', phase: 'active' },
+        ],
+        tasks: [{ id: 'task-9', subject: '任务九', status: 'in_progress', ownerName: 'exec-b', revision: 2 }],
+      };
+      const frozenLiveTeam = { members: [{ id: parentId, name: 'lead', role: 'lead', phase: 'active' }], tasks: [] };
+      const server = await startMockServer({
+        env: {
+          Q20_MOCK_HOST_SUBAGENTS: JSON.stringify([
+            { sessionId: 'sa-child-2', parentSessionId: parentId, origin: 'subagent', title: '后台任务二' },
+          ]),
+          Q20_MOCK_HOST_TEAM: JSON.stringify({
+            [parentId]: {
+              title: '团队会话',
+              agentTeam: snapshotTeam,
+              subagentCatalog: [{ id: 'sa-child-2', mode: 'one-shot', label: '后台任务二' }],
+              staleLiveAgentTeam: frozenLiveTeam,
+            },
+          }),
+        },
+      });
+      try {
+        const url = `/api/session/subagents?cwd=${encodeURIComponent(server.workspaceRoot)}&id=${parentId}&lite=1`;
+        let last = null;
+        for (let i = 0; i < 3; i++) {
+          const res = await httpRequest(url, { base: server.base });
+          if (res.status !== 200 || !res.body) throw new Error(`Expected 200 subagents payload, got ${res.status}`);
+          last = res.body;
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        const teammate = (last.subagents || []).find((s) => s.id === 'tm-exec-2');
+        if (!teammate) throw new Error('frozen live agentTeam shadowed the snapshot roster: teammate row disappeared');
+        if (!Array.isArray(last.tasks) || last.tasks.length !== 1 || last.tasks[0].id !== 'task-9') {
+          throw new Error(`frozen live agentTeam erased the task board, got ${JSON.stringify(last.tasks)}`);
+        }
+        const bgTask = (last.subagents || []).find((s) => s.id === 'sa-child-2');
+        if (!bgTask || bgTask.mode !== 'one-shot' || bgTask.kind !== '后台任务') {
+          throw new Error(`one-shot background task row must survive snapshot merge, got ${JSON.stringify(bgTask)}`);
+        }
+        return { rosterSurvived: true, taskBoardSurvived: last.tasks.length, backgroundTaskSurvived: true };
+      } finally {
+        await server.stop();
+      }
+    });
+
     // 13. [UNIT] Session FSM & Tail Status Text Sanitization Contract
     await runner.run('Session FSM & Tail Status Text Sanitization Contract', async () => {
       const html = fs.readFileSync(path.join(__dirname, 'static/index.html'), 'utf8');
