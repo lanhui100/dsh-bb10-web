@@ -3803,7 +3803,8 @@
 
     if (archiveBackBtn) {
       archiveBackBtn.onclick = function() {
-        openSess();
+        var originMode = (typeof currentSessionOriginViewMode === 'number') ? currentSessionOriginViewMode : 0;
+        openSess(false, originMode);
       };
     }
 
@@ -5303,6 +5304,8 @@
     var kbSessIdx = -1;
     // 会话面板视图模式：0=当前工作区全部，1=全工作区进行中，2=全工作区待处理，3=未分组
     var sessViewMode = 0;
+    // 跟踪当前打开会话是从哪个会话面板视图模式进入的（0/1/2/3），归档或返回时精准复原
+    var currentSessionOriginViewMode = 0;
     // 当前工作区会话视图筛选：'hide-archived' (默认), 'all' (显示全部包括已归档), 'only-archived' (仅显示已归档)
     var sessArchivedFilter = 'hide-archived';
     var kbModelIdx = -1;
@@ -6988,6 +6991,7 @@
             var archBadge = s.isArchived ? '<span style="color:#888888; font-size:10px; margin-right:4px;">[📦 已归档]</span>' : '';
             var label = sessionStateMark(s) + '<div class="sess-title">' + archBadge + escapeHtml(sessLabel(s)) + sessDateHtml(s) + '</div>';
             var sn = mkNode(label, cls, function() {
+              currentSessionOriginViewMode = 0;
               selectSession(cwd, s.id);
               closeSess();
             });
@@ -7085,6 +7089,7 @@
           var fromName = s.cwd ? s.cwd.split('/').pop() : '';
           var label = sessionStateMark(s) + '<div class="sess-title">' + escapeHtml(sessLabel(s)) + sessDateHtml(s) + (fromName ? '<div style="font-size:10px;color:#777;">📁 ' + escapeHtml(fromName) + '</div>' : '') + '</div>';
           var sn = mkNode(label, cls, function() {
+            currentSessionOriginViewMode = 3;
             selectSession(s.cwd || getCwd(), s.id);
             closeSess();
           });
@@ -7146,6 +7151,7 @@
               var cls = 'tree-sess' + (isCur ? ' active-sess' : '');
               var label = sessionStateMark(s) + '<div class="sess-title">' + escapeHtml(sessLabel(s)) + sessDateHtml(s) + '</div>';
               var sn = mkNode(label, cls, function() {
+                currentSessionOriginViewMode = mode;
                 selectSession(wc, s.id);
                 closeSess();
               });
@@ -7771,6 +7777,7 @@
     function activateSessNode(n) {
       if (!n) return;
       if (n.kind === 'sess') {
+        currentSessionOriginViewMode = sessViewMode;
         selectSession(n.cwd, n.sid);
         closeSess();
       }
@@ -8566,12 +8573,13 @@
       pruneArchivedLocally(sid, targetCwd);
       if (isCurrent) {
         // 当前会话归档：阅读上下文立即收尾并打开面板，面板已是剔除后的乐观态，无 loading。
-        // openSess(true)：禁止面板重拉把已归档项闪回来；静默对账负责后台一致性。
+        // openSess(true, originMode)：精准保持用户进入此会话时的面板视图模式（如 mode 3 未分组）
+        var originMode = (typeof currentSessionOriginViewMode === 'number') ? currentSessionOriginViewMode : 0;
         stopAttach();
         startNewChat();
         closeComposer();
         kbSessIdx = -1;
-        openSess(true);
+        openSess(true, originMode);
         setStatus('会话已归档，请选择要进入的会话');
       } else if (isSessOpen) {
         kbSessIdx = -1;
