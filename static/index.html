@@ -6209,6 +6209,7 @@
     function closeSess() {
       isSessOpen = false;
       kbSessIdx = -1;
+      if (sessTree) { sessTree.__sig = null; } // 下次打开强制重建
       sessOverlay.style.display = 'none';
     }
 
@@ -6879,7 +6880,60 @@
       if (keepScroll && typeof wsPanel !== 'undefined' && wsPanel) { try { wsPanel.scrollTop = savedTop; } catch (e) {} }
     }
 
+    // 会话树内容签名：后台 5s 轮询/轻量状态刷新归来时数据常无变化，
+    // 据此跳过整树 innerHTML 重建，防止重建瞬间换手 DOM 吞掉鼠标点击。
+    function sessTreeSignature() {
+      var cwd = getCwd();
+      var sig = 'm:' + (typeof sessViewMode === 'number' ? sessViewMode : 0) +
+                '|f:' + (sessArchivedFilter || '') +
+                '|c:' + cwd +
+                '|sid:' + (currentSessionId || '');
+      if (sessViewMode === 1 || sessViewMode === 2) {
+        for (var w = 0; w < wsList.length; w++) {
+          var wc = wsList[w].cwd;
+          var wlist = sessCache[wc];
+          if (wlist) {
+            sig += '|' + wc + ':' + wlist.length;
+            for (var j = 0; j < wlist.length; j++) {
+              var wsess = wlist[j];
+              sig += ',' + (wsess.id || '') + (wsess.isRunning ? 'R' : '') + (wsess.state || '');
+            }
+          } else {
+            sig += '|' + wc + ':nil';
+          }
+        }
+      } else if (sessViewMode === 3) {
+        var ulist = sessCache.__ungrouped__;
+        if (ulist) {
+          sig += '|u:' + ulist.length;
+          for (var u = 0; u < ulist.length; u++) {
+            sig += ',' + (ulist[u].id || '') + (ulist[u].state || '');
+          }
+        } else {
+          sig += '|u:nil';
+        }
+      } else {
+        var cacheKey = cwd + (sessArchivedFilter === 'hide-archived' ? '' : '::' + sessArchivedFilter);
+        var list = sessCache[cacheKey];
+        if (list) {
+          sig += '|l:' + list.length;
+          for (var k = 0; k < list.length; k++) {
+            var s = list[k];
+            sig += ',' + (s.id || '') + '#' + (s.isArchived ? 'A' : 'N') + '#' + (s.isRunning ? 'R' : '') + (s.state || '');
+          }
+        } else {
+          sig += '|l:nil';
+        }
+      }
+      return sig;
+    }
+
     function renderSessTree(keepScroll) {
+      var sig = sessTreeSignature();
+      if (sessTree.childNodes.length > 0 && sessTree.__sig === sig) {
+        return; // 内容未变：保住 hover / kb-sel 选中态与视口，不重建 DOM
+      }
+      sessTree.__sig = sig;
       var savedTop = (typeof sessPanel !== 'undefined' && sessPanel) ? sessPanel.scrollTop : 0;
       sessTree.innerHTML = '';
       sessNodes = [];
@@ -8187,6 +8241,50 @@
       wsRemoveOverlay.onclick = function(e) {
         if (e && e.target === wsRemoveOverlay) {
           closeWsRemove();
+        }
+      };
+    }
+
+    // W 面板鼠标点击：容器单次事件委托（ES5，旧 WebKit 兼容）。
+    if (wsTree && !wsTree.__delegated) {
+      wsTree.__delegated = true;
+      wsTree.onclick = function(e) {
+        var ev = e || window.event;
+        var t = ev.target || ev.srcElement;
+        while (t && t !== wsTree) {
+          if (t.className && String(t.className).indexOf('tree-node') !== -1) {
+            for (var i = 0; i < wsNodes.length; i++) {
+              if (wsNodes[i].el === t) {
+                activateWsNode(wsNodes[i]);
+                return;
+              }
+            }
+            return;
+          }
+          t = t.parentNode;
+        }
+      };
+    }
+
+    // C 面板鼠标点击：容器单次事件委托（ES5，旧 WebKit 兼容）。
+    // 不在行级单绑 onclick：renderSessTree 整树 innerHTML 替换窗口内落点的点击会丢失；
+    // 容器常驻则不受影响。命中 kind==='sess' 的行即 activateSessNode(node)。
+    if (sessTree && !sessTree.__delegated) {
+      sessTree.__delegated = true;
+      sessTree.onclick = function(e) {
+        var ev = e || window.event;
+        var t = ev.target || ev.srcElement;
+        while (t && t !== sessTree) {
+          if (t.className && String(t.className).indexOf('tree-node') !== -1) {
+            for (var i = 0; i < sessNodes.length; i++) {
+              if (sessNodes[i].el === t) {
+                activateSessNode(sessNodes[i]);
+                return;
+              }
+            }
+            return;
+          }
+          t = t.parentNode;
         }
       };
     }

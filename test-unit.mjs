@@ -3276,6 +3276,32 @@ async function main() {
       };
     });
 
+    // 38. Tree Modals Container Click Delegation & Signature Contract
+    await runner.run('Tree Modals Container Click Delegation & Signature Contract', async () => {
+      const html = fs.readFileSync(path.join(__dirname, 'static', 'index.html'), 'utf8');
+
+      // 1) sessTree delegation
+      if (!html.includes('sessTree.onclick = function(e) {') || !html.includes('sessTree.__delegated')) {
+        throw new Error('Missing container click delegation on #sess-tree (sessTree.onclick / __delegated)');
+      }
+
+      // 2) wsTree delegation
+      if (!html.includes('wsTree.onclick = function(e) {') || !html.includes('wsTree.__delegated')) {
+        throw new Error('Missing container click delegation on #ws-tree (wsTree.onclick / __delegated)');
+      }
+
+      // 3) sessTreeSignature to skip redundant DOM reconstruction
+      if (!html.includes('function sessTreeSignature(') || !html.includes('sessTree.__sig === sig')) {
+        throw new Error('Missing sessTreeSignature skip reconstruction mechanism for sessTree');
+      }
+
+      return {
+        sessTreeDelegation: true,
+        wsTreeDelegation: true,
+        sessTreeSignature: true,
+      };
+    });
+
   } catch (err) {
     suiteError = err;
   }
