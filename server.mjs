@@ -5949,8 +5949,10 @@ function serveStaticFile(reqPath, res) {
     const lastMod = stat.mtime.toUTCString();
     const inm = res.req && res.req.headers ? (res.req.headers['if-none-match'] || '') : '';
     const ims = res.req && res.req.headers ? (res.req.headers['if-modified-since'] || '') : '';
+    // HTML 必须每次重验证，避免部署后普通刷新仍读一小时旧缓存；其它静态资源保留长缓存。
+    const cacheControl = ext === '.html' ? 'no-cache' : 'public, max-age=3600';
     if ((inm && inm === etag) || (!inm && ims && ims === lastMod)) {
-      res.writeHead(304, { ETag: etag, 'Last-Modified': lastMod, ...SECURITY_HEADERS });
+      res.writeHead(304, { ETag: etag, 'Last-Modified': lastMod, 'Cache-Control': cacheControl, ...SECURITY_HEADERS });
       res.end();
       return;
     }
@@ -5959,7 +5961,7 @@ function serveStaticFile(reqPath, res) {
       'Content-Type': contentType,
       ETag: etag,
       'Last-Modified': lastMod,
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': cacheControl,
       ...SECURITY_HEADERS,
       ...getCorsHeaders(res.req),
     };

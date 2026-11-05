@@ -2560,8 +2560,8 @@ async function main() {
       if (resStatic.status !== 200 || !resStatic.headers.etag) {
         throw new Error(`Static / must return 200 with ETag, got ${resStatic.status}`);
       }
-      if (!resStatic.headers['cache-control'] || resStatic.headers['cache-control'].indexOf('max-age=3600') < 0) {
-        throw new Error(`Static / missing Cache-Control max-age=3600: ${resStatic.headers['cache-control']}`);
+      if (resStatic.headers['cache-control'] !== 'no-cache') {
+        throw new Error(`Static / must revalidate HTML on every load: ${resStatic.headers['cache-control']}`);
       }
       const res304 = await httpRequest('/', { headers: { 'If-None-Match': resStatic.headers.etag } });
       if (res304.status !== 304) {

@@ -705,6 +705,20 @@
     .msg-wrap.msg-selected {
       border-left: 2px solid #26A69A;
     }
+    /* 中间过程只供轮次折叠面板回看；流式正文不展示，当前动作由状态栏承载。 */
+    #chat-container > .thought-card,
+    #chat-container > .tool-pill,
+    #chat-container > .tools-container,
+    .msg-wrap > .thought-card,
+    .msg-wrap > .tool-pill,
+    .msg-wrap > .tools-container {
+      display: none;
+    }
+    .turn-process-body .thought-card,
+    .turn-process-body .tool-pill,
+    .turn-process-body .tools-container {
+      display: block;
+    }
     .thought-card {
       margin-bottom: 2px;
       padding: 1px 0;
@@ -10349,14 +10363,22 @@
       var kids = container.childNodes;
       var k, el, pi, ps, j;
       if (!trailingOnly) {
-        // 单轮 wrap：先倒找最终回答（最后一个含非空文本且非'...'的气泡）
         var answerBubble = null;
         var assistantBubbles = container.getElementsByClassName ? container.getElementsByClassName('msg-assistant') : [];
         for (j = assistantBubbles.length - 1; j >= 0; j--) {
-          var abText = ((assistantBubbles[j].innerText || assistantBubbles[j].textContent || '') + '').replace(/^\s+|\s+$/g, '');
-          if (abText && abText !== '...') {
+          if (assistantBubbles[j].getAttribute('data-process-message') === 'true') continue;
+          if (assistantBubbles[j].getAttribute('data-final-answer') === 'true') {
             answerBubble = assistantBubbles[j];
             break;
+          }
+        }
+        if (!answerBubble) {
+          for (j = assistantBubbles.length - 1; j >= 0; j--) {
+            var abText = ((assistantBubbles[j].textContent || '') + '').replace(/^\s+|\s+$/g, '');
+            if (abText && abText !== '...') {
+              answerBubble = assistantBubbles[j];
+              break;
+            }
           }
         }
         for (k = 0; k < kids.length; k++) {
@@ -10530,7 +10552,8 @@
         var w = wraps[wi];
         var bs = w.getElementsByClassName ? w.getElementsByClassName('msg-assistant') : [];
         for (bi = 0; bi < bs.length; bi++) {
-          var bText = ((bs[bi].innerText || bs[bi].textContent || '') + '').replace(/^\s+|\s+$/g, '');
+          if (bs[bi].getAttribute('data-process-message') === 'true') continue;
+          var bText = ((bs[bi].textContent || '') + '').replace(/^\s+|\s+$/g, '');
           if (bText && bText !== '...') { answerIdx = wi; break; }
         }
         if (answerIdx !== -1) break;
@@ -10645,6 +10668,10 @@
           var fbBubble = document.createElement('div');
           fbBubble.className = 'msg-assistant';
           fbBubble.innerHTML = formatContent(displayText);
+          // 工具状态兜底不是 Agent 回答，必须随工具节点进入过程折叠。
+          if (/^[●■]\s*(正在调用工具|已停止)/.test(displayText)) {
+            fbBubble.setAttribute('data-process-message', 'true');
+          }
           wrap.appendChild(fbBubble);
           lastBubble = fbBubble;
         } else {
@@ -12463,6 +12490,12 @@
       var toolElementMap = {};
       var liveDeliverables = [];
       var liveDeliverablesWrap = null;
+      var terminalFolded = false;
+      function finalizeLiveProcessOnce() {
+        if (terminalFolded) return;
+        terminalFolded = true;
+        finalizeLiveProcess(assistantWrap);
+      }
 
       function updateLiveDeliverables() {
         if (!liveDeliverables || !liveDeliverables.length) return;
@@ -12843,12 +12876,14 @@
                     if (fullAssistantText && fullAssistantText !== '...') {
                       var liveActBar = createMessageActions(fullAssistantText, null);
                       liveActBar.appendChild(createForkAction({ role: 'assistant', seq: -1, text: fullAssistantText }));
-                      ensureLiveBubble().appendChild(liveActBar);
+                      var finalLiveBubble = ensureLiveBubble();
+                      finalLiveBubble.setAttribute('data-final-answer', 'true');
+                      finalLiveBubble.appendChild(liveActBar);
                     }
                     // 终态时挂载交付文件列表
                     updateLiveDeliverables();
                     // 轮次结束：本轮思考+工具收进单行折叠（对齐 dsh turnClosed 折叠）
-                    finalizeLiveProcess(assistantWrap);
+                    finalizeLiveProcessOnce();
                     clearQueueDock(sendSid || currentSessionId); // 终态收口：排队/插队槽失效或被下一轮接管
                     if (typeof refreshGoalRing === 'function') refreshGoalRing();
                     // Plus 核销：receipt 单次消费，发出即清卡（成功/中断/异常一律清，失败不复用）
@@ -12867,7 +12902,7 @@
                     hideQuestionPanel();
                     flushRender(true);
                     // 中断终态同样折叠本轮过程
-                    finalizeLiveProcess(assistantWrap);
+                    finalizeLiveProcessOnce();
                     clearQueueDock(cancelSid); // 中断终态：排队/插队槽失效
                     if (typeof refreshGoalRing === 'function') refreshGoalRing();
                   } else if (eventType === 'error') {
@@ -12887,7 +12922,7 @@
                     }
                     showStreamError(streamError.title, streamError.detail);
                     // 异常终态同样折叠本轮过程
-                    finalizeLiveProcess(assistantWrap);
+                    finalizeLiveProcessOnce();
                     clearQueueDock(sendSid || currentSessionId); // 异常终态：排队/插队槽失效
                     if (typeof refreshGoalRing === 'function') refreshGoalRing();
                     notifySessionComplete(cwd, sendSid || currentSessionId, 'error', errMsg, prompt);
@@ -12947,6 +12982,10 @@
               updateSessionsBackground(cwd);
               // 终态后刷新 stats：上下文圆环分子（输入侧压力）随之更新
               try { if (typeof loadSessionStats === 'function') loadSessionStats(); } catch (eSE) {}
+              // BB10 可能在 readyState 3 未完整派发末帧；正常 EOF 也必须收口过程节点。
+              if (streamError || stopRequested || !(questionState && (questionState.visible || questionState.dismissed))) {
+                finalizeLiveProcessOnce();
+              }
             }
           }
         }
