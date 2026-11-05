@@ -78,10 +78,10 @@ lines.push('  finalizeLiveProcess(wrapB);');
 lines.push('  ok("B-settled-folded", runPill.className === "tool-pill" && byClass(wrapB, "turn-process").length === 1);');
 lines.push('  ok("B-label-1call", rowText(wrapB) === "\\u25b6 1 \\u6b21\\u5de5\\u5177\\u8c03\\u7528", rowText(wrapB));');
 lines.push('  document.body.removeChild(wrapB);');
-// C: single process item must NOT fold (meaningless disclosure row)
+// C: single process item folds into turn-process disclosure row (aligning with user requirement)
 lines.push('  var wrapC1 = document.createElement("div"); wrapC1.appendChild(mkThought("only thinking"));');
 lines.push('  document.body.appendChild(wrapC1);');
-lines.push('  ok("C1-single-thought-nofold", foldProcessChildren(wrapC1, null) === false && byClass(wrapC1, "turn-process").length === 0);');
+lines.push('  ok("C1-single-thought-fold", foldProcessChildren(wrapC1, null) === true && byClass(wrapC1, "turn-process").length === 1);');
 lines.push('  document.body.removeChild(wrapC1);');
 lines.push('  var wrapC2 = document.createElement("div"); wrapC2.appendChild(mkThought("t1")); wrapC2.appendChild(mkThought("t2"));');
 lines.push('  document.body.appendChild(wrapC2); foldProcessChildren(wrapC2, null);');
@@ -141,12 +141,12 @@ lines.push('  ok("G-answer-last", rootG.lastChild === g2);');
 lines.push('  byClass(rootG, "turn-process-row")[0].click();');
 lines.push('  ok("G-map-kept", turnProcessOpenMap["kG"] === true);');
 lines.push('  document.body.removeChild(rootG);');
-// G2: single tool call only — no fold (meaningless row removed)
+// G2: single tool call only — folds into turn-process disclosure row (aligning with user requirement)
 lines.push('  var rootG2 = document.createElement("div");');
 lines.push('  var gp = mkWrap(); gp.appendChild(mkPill("bash - ls [done]", false));');
 lines.push('  rootG2.appendChild(gp);');
 lines.push('  document.body.appendChild(rootG2);');
-lines.push('  ok("G2-single-call-nofold", foldTurnGroupInDom([gp], null) === false && byClass(rootG2, "turn-process").length === 0);');
+lines.push('  ok("G2-single-call-fold", foldTurnGroupInDom([gp], null) === true && byClass(rootG2, "turn-process").length === 1);');
 lines.push('  document.body.removeChild(rootG2);');
 // G3: interrupted turn without answer — whole group folds, counts intermediate msg
 lines.push('  var rootG3 = document.createElement("div");');

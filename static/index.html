@@ -10446,8 +10446,6 @@
         if ((nodes[mi].className || '').indexOf('msg-assistant') !== -1) bubbleCount++;
       }
       if (nodes.length === 0) return false;
-      // 「1 次工具调用」类单条折叠无意义：孤立胶囊/单张思考卡保持原样
-      if (nodes.length <= 1) return false;
       var msgCount = (typeof msgCountOverride === 'number') ? msgCountOverride : bubbleCount;
       // dsh zh 口径：'{count} 次工具调用 · {count} 条消息'，纯思考记 '已思考'
       var label = turnProcessLabel(toolCount, msgCount);
