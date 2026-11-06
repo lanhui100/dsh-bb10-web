@@ -1,0 +1,70 @@
+{
+  "verdict": "PASS",
+  "audited_scopes": [
+    "server.mjs",
+    "lib/preview-policy.mjs",
+    "static/index.html",
+    ".dev-team/contract-wave-2026-11-06.md"
+  ],
+  "findings": [
+    {
+      "file": "server.mjs",
+      "line": 6734,
+      "rule": "CONTRACT_BREAK",
+      "counterexample_cmd": "mkdir -p /tmp/h && git archive HEAD | tar -x -C /tmp/h && (cd /tmp/h && PORT=3912 node server.mjs >/dev/null 2>&1 &) ; sleep 3 ; for p in 3912 3090 ; do curl -sD- -o /dev/null \"http://127.0.0.1:$p/api/file?cwd=<HOME>/dsh-q20-web&path=<HOME>/deepseek-harness/README.md\" | grep -iE '^(transfer-encoding|content-length)'; done",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "server.mjs",
+      "line": 397,
+      "rule": "NFR_VIOLATION",
+      "counterexample_cmd": "Q20_MOCK_HOST=1 Q20_MOCK_HOST_PROJECTIONS_DELAY_MS=6000 node tests/acceptance/adversarial/preview-policy-attack.mjs",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": ".dev-team/state.json",
+      "line": 383,
+      "rule": "CORRECTNESS",
+      "counterexample_cmd": "ls -l tests/acceptance/artifacts/red-preview-policy*.log tests/acceptance/artifacts/red-preview-policy-at.log .dev-team/receipts/ ; node test-preview-browser.mjs ; echo exit=$?",
+      "severity": "ADVISORY"
+    }
+  ],
+  "six_questions": [
+    {
+      "id": 1,
+      "basis": "nfr-baseline.external_call_timeout_ms=3000；wave_2026_10_16_overrides.external_call_timeout_ms.host_session_projections_targeted=5000；契约 §1.3/§1.6 墙钟 ≤2500ms（AT-1b 上限 3000ms）",
+      "evidence": "本波新增外部 IO 只有宿主 RPC session/projections：硬超时 PROJECTIONS_TIMEOUT_MS=2500（server.mjs:5135），调用点 server.mjs:5161；生产分支 http.request(url,{timeout}) server.mjs:1117 + clientReq.on('timeout',destroy) server.mjs:1124-1126（硬放弃，非软取消）；mock 等价 M-1 见 server.mjs:400-431（超时 resolve {ok:false,error:'timeout',unreachable:true}，与生产逐字一致）。无第二取数通道（契约 §4.6）。端到端墙钟机器收据：审计复跑 `node tests/acceptance/adversarial/preview-policy-attack.mjs` → AT-1b『越界 403 in 2505ms; 区内 200 in 2ms』，SUITE-PREVIEW-AT 8/8 PASS exit=0（≤3000ms）；真实宿主实测（PORT=3911 本地实例 + 真 3080 宿主）：越界完全权限 200 time=0.244s、in-workspace 200 time=0.088s、未知 sid 403 time=0.579s、跨工作区 403 time=1.781s。仓库内 tests/acceptance/artifacts/red-preview-policy.log、red-preview-policy-at.log（08:11）为红相记录（早于实现文件 08:17-08:19），绿相物理日志未入库（见 findings[2]，ADVISORY，非行为缺陷）",
+      "verdict": "PASS"
+    },
+    {
+      "id": 2,
+      "basis": "nfr-baseline.logging（稳定前缀 text-prefix + 关联 token，required_tokens 形态 sid=<sessionId>）；契约 §1.3.3『[PREVIEW] 且含 sid，禁止吞异常静默放行』",
+      "evidence": "唯一新增日志 server.mjs:6757 `console.warn('[PREVIEW] policy unavailable sid=${sessionId} path=<redacted>')` —— 前缀稳定、含 sid、路径脱敏；A9.1a 断言命中『warn 命中 [PREVIEW] sid=session-a9-1a』（suite-preview-policy 14/14 PASS）。catch 面全量核查：(a) server.mjs:4292-4297 捕获 RPC 异常→available:false→403 PREVIEW_POLICY_UNAVAILABLE（fail-closed，异常细节不出网，并由 6757 落 warn）；(b) server.mjs:6744-6749 registered 计算 catch→false→仅 session+完全权限可放行（fail-closed）；(c) static/index.html:9789-9791 JSON.parse try/catch 仅回落旧文案。未发现裸 catch 后默认放行（fail-open）路径；无新增日志缺 sid",
+      "verdict": "PASS"
+    },
+    {
+      "id": 3,
+      "basis": "nfr-baseline.resource_release = [clear-timers, abort-xhr, close-sockets]",
+      "evidence": "mockApplyRpcTimeout（server.mjs:410-431）：timer 于 setTimeout 后立即 unref（420），两条 settle 分支均 clearTimeout（424 / 429），超时分支 timer 已自然触发——timer 必然回收；单飞 inflight 在 finally 删除（server.mjs:5178-5180），不会悬挂 Promise。客户端：filePreviewXhr 全局句柄在打开新预览/关闭时 __aborted+abort（static/index.html:9691、9827），回调以 __aborted/seq 守卫（9738、9772）——XHR 与 seq 均可废弃，旧响应不会写屏。新增代码未创建 socket/流/fs 句柄（diff 仅纯函数、RPC 复用、字符串与属性拼接）。唯一残留：mock 注入延迟 setTimeout（server.mjs:397）在超时后不 clear 也不 unref，最多多挂 delay-timeout 毫秒（mock-only，见 findings[1]）",
+      "verdict": "PASS"
+    },
+    {
+      "id": 4,
+      "basis": "nfr-baseline.concurrency_lock = single-writer-state-mutex；契约 §1.6 负缓存 + 单飞；§3bis AT-3（不同 sid 并发 20 轮 barrier）",
+      "evidence": "取数单飞按 sid：sessionProjectionsInflight.get(sid) 复用（server.mjs:5152-5182），正/负缓存 TTL=15000（5132-5135）与缓存键均为 sid，跨 sid 不共享对象。确定性并发证据：AT-3『20 轮 barrier 并发：sid-full 恒 200（内容一致）/ sid-write 恒 403 PREVIEW_PERMISSION_REQUIRED』，本次复跑 exit=0；同 sid 变更在 15s TTL 内沿用旧投影属冻结语义（契约 §3bis 明示接受），实现无越界缓存共享。另 A4 单一在飞（suite-core 8/8 PASS）证明 session/list 主通道单飞未被本波破坏",
+      "verdict": "PASS"
+    },
+    {
+      "id": 5,
+      "basis": "契约 §1.4 测试接缝仅 mock-only；§4 Non-Goals 与生产可用性（不得要求人工新配置）",
+      "evidence": "新增环境变量仅 Q20_MOCK_HOST_PROJECTIONS_FAIL / Q20_MOCK_HOST_PROJECTIONS_DELAY_MS（server.mjs:363-372），只被 mockHandleRpcAsync（server.mjs:375-401）读取，而该函数仅由 Q20_MOCK_HOST 分支进入（server.mjs:1035-1037）；生产分支 callDshWebRpc 完全不读取。lib/preview-policy.mjs 零 process.env / 零 IO / 零 Date（lib/preview-policy.mjs:22-57）。生产实测：本地起 server.mjs 未设任何 Q20_* 环境变量，越界完全权限 200、无 session 403、415/413 不变——无需人工配置即可工作，宿主不可达时 fail-closed（AT-1a/1c PASS）",
+      "verdict": "PASS"
+    },
+    {
+      "id": 6,
+      "basis": "契约 §1.3 向后兼容铁律 / §1.2 错误码表 / 裁决 R-1 R-2 R-3；§3 A6、A6b、§3bis AT-2e",
+      "evidence": "无接口删除或重编号：diff 仅在 /api/file 增加可选 query `session`（server.mjs:4279-4286 getAll 长度≠1 即按缺失、6750 取值），未改其它路由、未改任何既有序列化字段。无 session 403 体逐字节等价：A6『out=403 54B 逐字节等价; in=200 16B 内容一致; RPC=0』，本次另以 cmp 对照 HEAD 响应体 → BODY-IDENTICAL；无 session 越界仍不含 code（server.mjs:6773-6778 只在 sessionId 合法时附 code）；415/413 未被完全权限放宽（A9.4 PASS + 实测 /etc/hostname → 415）；A6b 未注册 cwd 仍 403 且不泄路径；AT-2e 客户端自述 permission 被忽略 → 403 PREVIEW_PERMISSION_REQUIRED。机器证据全部复跑通过：suite-preview-policy 14/14、preview-policy-attack 8/8、suite-core 8/8、test-unit 39/39、test-decoupling PASS、acorn ES5 PASS。唯一可观测差异是无 session 403 的传输 framing（HEAD: Transfer-Encoding chunked → 现: Content-Length: 54，body 不变），已单列 findings[0]（ADVISORY）",
+      "verdict": "PASS"
+    }
+  ]
+}

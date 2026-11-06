@@ -1,0 +1,31 @@
+PASS  AGENTS.md readable
+PASS  AGENTS.md section 六 exists
+PASS  section 六 item 0 heading present
+PASS  charter section 六 contains "完全解耦"
+PASS  charter section 六 contains "两条管道"
+PASS  charter section 六 contains "可达性判定与租约互斥"
+PASS  charter section 六 contains "存储与凭据镜像豁免"
+PASS  charter section 六 contains "上游对齐义务"
+PASS  charter section 六 contains "预发布阶段"
+PASS  no git submodules
+PASS  no .gitmodules file
+PASS  no vendored deepseek-harness items
+PASS  server.mjs readable for upload-path gate
+PASS  upload proxy references "/api/session/uploadFileBinary"
+PASS  upload proxy references "proxyUploadToHost"
+PASS  upload proxy references "/api/session/upload"
+PASS  no third-path upload call "saveFileStream("
+PASS  no third-path upload call "admitEncodedFile("
+PASS  no third-path upload call "admitPromptContent("
+PASS  no third-path upload call ".attachments."
+PASS  no third-path upload call "ctx.fileUpload"
+PASS  file preview routes slice present
+PASS  preview mirror is read-only (no writeFileSync)
+PASS  preview mirror is read-only (no appendFileSync)
+PASS  preview mirror is read-only (no createWriteStream)
+PASS  preview mirror is read-only (no mkdirSync)
+PASS  preview mirror is read-only (no rmSync)
+PASS  preview mirror is read-only (no unlinkSync)
+PASS  preview mirror is read-only (no renameSync)
+
+DECOUPLING PASS: charter clause structurally present, no submodule, no vendored dsh.

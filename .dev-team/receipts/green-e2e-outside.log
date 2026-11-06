@@ -1,0 +1,11 @@
+✔ 交付未在工作区内的文件卡可点（preview action） :: {"exists":true,"clickable":true,"sid":"session-mw47e45cavblex","path":"/tmp/q20-preview-receipt.md","hasPreviewAction":true}
+✔ 卡片带会话 id（data-fpsid） :: session-mw47e45cavblex
+✔ 工作区外 .md 全屏预览渲染成功（完全权限放行） :: Q20 越界预览真机收据
+•用途：本轮（wave-2026-11-06 preview-policy）真机验证「完全权限会话 + 本会话交付物 = 工作区外文件
+✔ 预览标题为 AGENTS.md
+✔ 无当前会话时卡片不追加 session 参数（sid 空） :: {"sid":"","clickable":true}
+✔ 无 session 时诚实拒绝（403 文案，不显示文件内容） :: 该文件不在当前工作区内，已拒绝读取
+✔ 正向流程 Console Error = 0（403 拒绝请求本身的网络日志不计）
+
+==== E2E SUMMARY ====
+total=7 passed=7 failed=0

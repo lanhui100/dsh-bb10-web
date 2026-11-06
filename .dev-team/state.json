@@ -354,9 +354,9 @@
     "task-3 (implementation, executor)"
    ],
    "contract": ".dev-team/contract-wave-2026-11-06.md",
-   "red_commit": null,
+   "red_commit": "25d8af5",
    "green_commit": null,
-   "status": "in_progress",
+   "status": "completed",
    "quarantine": null,
    "nfr_degraded": [],
    "write_scopes": {
@@ -364,6 +364,63 @@
     "server.mjs": "task-3",
     "static/index.html": "task-3",
     "tests/acceptance/": "task-2"
+   },
+   "red_tag": null,
+   "observability_gate": {
+    "cmd": "audit-diff.sh --base 25d8af5",
+    "exit": 4,
+    "disposition": "not-applicable: 仓库无 docs/observability.yaml 声明文件（历史各波次同样缺省），非本次变更引入；已在交付说明登记"
+   },
+   "gates": {
+    "node --check": 0,
+    "es5-acorn": 0,
+    "suite-preview-policy": "28/28=0",
+    "adversarial": "12/12=0",
+    "test-unit": "39/39=0",
+    "test-decoupling": 0,
+    "test-suite": "7/7=0",
+    "test-preview-browser": "29/29=0",
+    "browser-e2e": "7/7=0"
+   },
+   "prod_receipts": {
+    "deliverable-out-of-workspace": "200 (437B /tmp/q20-preview-receipt.md, this session deliverable)",
+    "non-deliverable-out-of-workspace": "403 PREVIEW_NOT_IN_DELIVERABLES",
+    "credentials": "403 PREVIEW_SENSITIVE_PATH",
+    "gh-hosts-yml-review-counterexample": "403",
+    "in-workspace": "200",
+    "legacy-no-session": "403 byte-identical",
+    "unregistered+nonexistent": "403 (no oracle)"
+   },
+   "red_commits": [
+    "25d8af5",
+    "2491389",
+    "5269373",
+    "571df92"
+   ],
+   "test_migration_commit": "f9f0ec6",
+   "rounds": 5,
+   "residual_risks": [
+    "host workingDirectory must be absolute (verified absolute on real host)",
+    "deliverables cache stamp mtimeMs:size",
+    "cold-start transcript parse ~hundreds ms on non-fast path"
+   ],
+   "reviews": [
+    "review-plan.json",
+    "review-l3a-preview.json",
+    "review-l3b-preview.json",
+    "review-l3p-preview.json",
+    "review-plan-r4.json",
+    "review-l3b-preview-r4.json",
+    "review-plan-r8.json",
+    "review-l3b-preview-r8.json"
+   ],
+   "reviews_final": {
+    "review-plan-r8.json": "PASS",
+    "review-l3b-preview-r8.json": "PASS",
+    "review-l3p-preview.json": "PASS",
+    "review-l3a-preview.json": "PASS",
+    "review-plan.json": "FAIL(then fixed)",
+    "review-l3b-preview.json": "FAIL(then fixed)"
    }
   }
  ],

@@ -1,0 +1,47 @@
+{
+  "verdict": "PASS",
+  "audited_scopes": [
+    "server.mjs",
+    "static/index.html",
+    "lib/preview-policy.mjs",
+    ".dev-team/contract-wave-2026-11-06.md",
+    ".agents/notes/implemented/bug-fix/2026-11-06-out-of-workspace-preview-session-policy.md"
+  ],
+  "findings": [
+    {
+      "file": "server.mjs",
+      "line": 5180,
+      "rule": "SECURITY",
+      "counterexample_cmd": "SID=session-mw47e45cavblex; curl -s -o /dev/null -w '%{http_code} %{size_download}\\n' --get --data-urlencode cwd=<HOME>/dsh-q20-web --data-urlencode path=<HOME>/.config/gh/hosts.yml --data-urlencode session=$SID http://127.0.0.1:3090/api/file  # 现网实测 403/105B（该路径未入本会话清单）。注入链（读码可验，非现网可复现）：server.mjs:5160-5189 在 tool/call 阶段按 arguments.file_path 记账，完全不看 tool/result 成败；故会话内一次 edit(file_path=<HOME>/.config/gh/hosts.yml, old_string=<不存在>) 即使执行失败、文件未改，也会把该凭据记入交付物清单，随后同一 curl 即 200/242B。~/.dsh/.credentials.yaml 与 ~/.ssh/* 仍被 R-4 拦（403 SENSITIVE），但 ~/.config/gh、~/.aliyun、~/.docker、~/.claude.json 无名单覆盖。危害评估：写入方只有模型本身，而完全权限模型本可直接把凭据打印进对话；能读 /api/file 的调用方（loopback 或持 Cookie）同样能读 /api/history —— 故本条不构成对该调用方的权限提升，仅为「未打印但被声明过的文件」持久化为可读面，属 ADVISORY 可接受（建议：仅在 tool/result 成功时计入清单；present 条目限定在 sessionCwd 内）",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "server.mjs",
+      "line": 4411,
+      "rule": "CONTRACT_BREAK",
+      "counterexample_cmd": "curl -s -o /dev/null -w '%{http_code} %{size_download}\\n' --get --data-urlencode cwd=<HOME>/.dsh --data-urlencode path=AGENTS.md --data-urlencode session=<完全权限且投影 workingDirectory 缺失/空的 sid> http://127.0.0.1:3090/api/file  # 该分支下 c 步按契约 §1.1 跳过、d 步 full 放行，G4 用 baseCwd=sessionCwd||fallbackCwd(=请求 cwd, 7003 传入 rootReal) 归一相对交付物条目；若该会话清单含相对条目 AGENTS.md → <HOME>/.dsh/AGENTS.md 变「成员」→ 200/1490B。R-8 冻结口径是「相对路径 path.resolve(sessionCwd, p)」，sessionCwd 未知时应 fail-closed 而非退化为调用方可控的请求 cwd。生产未观测到 workingDirectory 缺失的会话，故为潜在面；修法：sessionCwd==='' 时直接返回 null",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "server.mjs",
+      "line": 6971,
+      "rule": "CONTRACT_BREAK",
+      "counterexample_cmd": "curl -s -o /tmp/b -w '%{http_code} %{size_download}\\n' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=<HOME>/.dsh/.credentials.yaml'  # 实测 403 / 64B：{\"ok\":false,\"error\":\"preview of sensitive files is not allowed\"}；契约 §1.3「向后兼容铁律」与 R-2 括注均断言无 session 时为 54B 的 {\"ok\":false,\"error\":\"path escapes the workspace root\"}，而同一契约 R-4/§2 P1 又要求保留敏感文案——契约内部互斥，实现按 R-4 落地。对照：非敏感越界 <HOME>/.dsh/AGENTS.md 无 session 仍为 54B 逐字节一致",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "server.mjs",
+      "line": 4445,
+      "rule": "LEAK",
+      "counterexample_cmd": "journalctl -u dsh-q20-web --since '2026-11-06 09:03' --no-pager | grep -F '[PREVIEW]'  # 现存两行均形如 '[PREVIEW] policy unavailable sid=<sid> reason=no-values'，无绝对路径。但 4445 行把 err && err.message 原样拼入 warn：sessionTranscriptStamp(4417-4427) stat 成功后、getSessionHistory 读文件前转录被删/降权时 readFileSync 抛 \"ENOENT: no such file or directory, open '<HOME>/.dsh/sessions/--home-dm-dsh-q20-web--/<sid>/session.v4.jsonl.zstd'\"，绝对路径随 message 入日志，违反「[PREVIEW] 日志无绝对路径」承诺（仅本地日志，不出网；竞态窗口）",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": ".agents/notes/implemented/bug-fix/2026-11-06-out-of-workspace-preview-session-policy.md",
+      "line": 105,
+      "rule": "CONTRACT_BREAK",
+      "counterexample_cmd": "curl -s -o /dev/null -w '%{http_code}\\n' --get --data-urlencode cwd=<HOME>/dsh-q20-web --data-urlencode path=<HOME>/.dsh/AGENTS.md --data-urlencode session=session-mw47e45cavblex http://127.0.0.1:3090/api/file  # 实测 403 PREVIEW_NOT_IN_DELIVERABLES，ADR「Consequences」记 200/1490B；同法 path=/etc/hostname → 403 PREVIEW_NOT_IN_DELIVERABLES，ADR:106 记 415（该两条是 R-4 轮收据，R-8 收窄后未同提交更新）。另 ADR「Alternatives considered」仍把「只允许本会话交付物清单内的越界路径」列为已否决方案，而 R-8 正是采纳它——决策记录与终态实现自相矛盾（契约 §1.3/§4 侧已正确记录，§4.9/§4.11 三条信任边界齐备）",
+      "severity": "ADVISORY"
+    }
+  ]
+}

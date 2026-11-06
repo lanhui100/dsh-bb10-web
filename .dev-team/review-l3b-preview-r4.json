@@ -1,0 +1,34 @@
+{
+  "verdict": "FAIL",
+  "audited_scopes": ["server.mjs", "static/index.html", "lib/preview-policy.mjs", ".dev-team/contract-wave-2026-11-06.md"],
+  "findings": [
+    {
+      "file": "server.mjs",
+      "line": 4356,
+      "rule": "SECURITY",
+      "severity": "BLOCKING",
+      "counterexample_cmd": "curl -s -w ' [%{http_code} %{size_download}B]' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=<HOME>/.config/gh/hosts.yml&session=session-mw47e45cavblex'  # 期望 403 PREVIEW_SENSITIVE_PATH（与 ~/.dsh/.credentials.yaml 同类凭据、同为白名单内 yml）；实测 200 + 242B，响应体含 host oauth_token（gho_ 前缀，实机现值原样出网）。同法 curl '...&path=<HOME>/.docker/config.json&session=session-mw47e45cavblex' → 200 + 119B（ghcr.io auth base64）。根因：R-4 的 PREVIEW_SENSITIVE_BASENAMES / PREVIEW_SENSITIVE_EXTS / previewSensitivePrefixDirs(4364) 是枚举表，未覆盖 ~/.config/gh/、~/.docker/、~/.config/gcloud/、~/.azure/ 等主流凭据目录；此暴露面由本波新增的越界读能力首次打开（修复前该路径恒 403 'path escapes the workspace root'，实测对照可复核），故属本轮新增回归而非既有债。实现与冻结判据字面一致（A10a 21/21 全绿），缺口在契约 R-4 判据覆盖面不足 + 实现未做前缀补强，建议契约 amend：越界分支改「显式允许清单」或补上述凭据前缀 + 内容级秘密模式（gho_/ghp_/AKIA/PRIVATE KEY/BEGIN RSA）。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 4385,
+      "rule": "SECURITY",
+      "severity": "ADVISORY",
+      "counterexample_cmd": "ln <HOME>/.dsh/.credentials.yaml <HOME>/.l3b-probe/hardlink-creds.md && curl -s -w ' [%{http_code} %{size_download}B]' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=<HOME>/.l3b-probe/hardlink-creds.md&session=session-mw47e45cavblex'  # 期望 403（内容即 .credentials.yaml）；实测 200 + 397B（原文出网）。路径型 denylist 无法识别硬链接别名。远程不可达（需与目标同 uid 的本地写权，而该权限已等价于可直接读该文件），故列 ADVISORY；可选加固：越界目标 st_nlink>1 一律拒绝或加内容级凭据模式闸门。其余绕过面实测均不成立：大小写（.CREDENTIALS.YAML / SETTINGS.YAML / PROBE.PEM → 403）、尾空格（'.env.yaml%20' → 403）、尾点（settings.yaml. → 415）、符号链接（区内 innocent.md → 区外 .credentials.yaml → 403，区外普通 md → 200/403 随权限）、'..'/'%2e%2e'/'//'/'./' 冗余段、/proc/self/root 穿透 → 全部 403 PREVIEW_SENSITIVE_PATH。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 6859,
+      "rule": "LEAK",
+      "severity": "ADVISORY",
+      "counterexample_cmd": "curl -s -o /dev/null -w '%{http_code} ' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=<HOME>/l3b-nonexistent.md'; curl -s -o /dev/null -w '%{http_code}\\n' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=<HOME>/JOB_COPILOT_CHROME_EXTENSION_STRATEGY.md'  # 实测 404 / 403 → 已注册 cwd 上仍可分辨任意绝对路径的存在性；期望 两者不可区分。R-6 闸门（6854）只覆盖「!registered 且无合法 session」，带合法 session 的未注册 cwd 同样可探（不存在→404、命中 denylist→403 PREVIEW_SENSITIVE_PATH）。该形态在修复前既有（旧版 registered cwd 即 404/403 可分辨），非本轮回归，故 ADVISORY；如要闭合需对越界目标的存在性也统一为 403/单错文案。"
+    },
+    {
+      "file": "server.mjs",
+      "line": 6829,
+      "rule": "CORRECTNESS",
+      "severity": "ADVISORY",
+      "counterexample_cmd": "curl -s -D- -o /tmp/b -H 'Accept-Encoding: gzip' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=<HOME>/.dsh/.credentials.yaml&session=session-mw47e45cavblex' | grep -iE '^(content-length|content-encoding)'; wc -c </tmp/b  # 实测 Content-Length: 96 / 实体 96B / 无 Content-Encoding（一致）。但 sendPreviewReject 显式写的是「未压缩」JSON 长度，而 sendJsonGzipAware 的 gzip 判据是 byteLength>=GZIP_MIN_BYTES(1024)：当前全部拒绝体 ≤96B 故不可达，若将来某拒绝体 ≥1024B 且客户端 accept gzip，将出现 Content-Length 与实体不一致。上轮已作 ADVISORY 记录，本轮未退化、不可达，不重复判 BLOCKING。"
+    }
+  ]
+}

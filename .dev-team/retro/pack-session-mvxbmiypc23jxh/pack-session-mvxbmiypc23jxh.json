@@ -1,0 +1,80 @@
+{
+ "applicability": {
+  "acceptance_tests_present": true,
+  "note": "无验收测试时 red/drift 规则判 not-applicable，绝不静默通过"
+ },
+ "repo_profile": {
+  "acceptance_dirs": [
+   "tests/acceptance"
+  ],
+  "has_acceptance": true,
+  "top_exts": [
+   [
+    "md",
+    207
+   ],
+   [
+    "mjs",
+    26
+   ],
+   [
+    "png",
+    17
+   ],
+   [
+    "json",
+    14
+   ],
+   [
+    "log",
+    12
+   ],
+   [
+    "sh",
+    5
+   ]
+  ],
+  "test_scripts": {
+   "test": "node test-decoupling.mjs && node test-unit.mjs",
+   "test:decouple": "node test-decoupling.mjs",
+   "test:fold": "node test-fold-smoke.cjs",
+   "test:preview": "node test-preview-browser.mjs",
+   "test:live": "node test-suite.mjs",
+   "test:all": "node test-decoupling.mjs && node test-unit.mjs && node test-fold-smoke.cjs && node test-suite.mjs"
+  }
+ },
+ "run_id": "session-mvxbmiypc23jxh",
+ "task": "修复列表面板偶发鼠标点击失灵问题",
+ "tier": "A",
+ "base": "d1a478d",
+ "head": "21baa454121c6fdd6a0d215a093e49deeb732c8b",
+ "work": {
+  "L": 0,
+  "files": 0,
+  "board_tasks": [],
+  "gates_seen_in_session": {}
+ },
+ "commits": [
+  {
+   "sha": "21baa454121c",
+   "full": "21baa454121c6fdd6a0d215a093e49deeb732c8b",
+   "subject": "fix(web): add tree container click delegation and session tree signature to prevent click swallow",
+   "files": [
+    ".agents/notes/implemented/bug-fix/2026-11-01-fix-tree-panel-mouse-click-unresponsive.md",
+    "static/index.html",
+    "test-unit.mjs"
+   ],
+   "stat": "3 files changed, 159 insertions(+)"
+  }
+ ],
+ "post_run_commits": [],
+ "foreign_commits": [],
+ "frozen_test_drift": [],
+ "review_receipts": [],
+ "mechanical_red_flags": [],
+ "unknowns": [
+  "每个门禁实际抓到多少缺陷（gate_caught）需从 review JSON/测试日志判定",
+  "用户是否口头授权了自扩范围（scope）需读会话原文"
+ ],
+ "pack_hash": "d197975126ca55ee"
+}

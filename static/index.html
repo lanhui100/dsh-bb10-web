@@ -9509,6 +9509,11 @@
       return cCwd || (typeof getCwd === 'function' ? getCwd() : '') || (wsSelect ? wsSelect.value : '') || '';
     }
 
+    /** 当前会话 id（预览授权只信宿主投影，客户端只上报「这是哪个会话」，永不上报权限）。 */
+    function fpCurrentSid() {
+      return (typeof currentSessionId !== 'undefined' && currentSessionId) ? String(currentSessionId) : '';
+    }
+
     function fpAttachmentUrl(desc) {
       return '/api/attachment?id=' + encodeURIComponent(desc.id || '')
         + '&name=' + encodeURIComponent(desc.name || '')
@@ -9546,6 +9551,7 @@
       var sCwd = (typeof currentSessionCwd !== 'undefined' && currentSessionCwd) ? currentSessionCwd : '';
       var chipCwd = desc.cwd || sCwd || fpCurrentCwd();
       var attrs = ' data-fpchip="1" data-fpname="' + escapeHtml(name) + '" data-fpkind="' + kind + '"';
+      attrs += ' data-fpsid="' + escapeHtml(fpCurrentSid()) + '"';
       if (chipCwd) attrs += ' data-fpcwd="' + escapeHtml(String(chipCwd)) + '"';
       if (desc.mediaType) attrs += ' data-fpmt="' + escapeHtml(String(desc.mediaType)) + '"';
       if (desc.id) attrs += ' data-fpid="' + escapeHtml(String(desc.id)) + '"';
@@ -9713,10 +9719,14 @@
       }
       if (path) {
         var targetCwd = chip.getAttribute('data-fpcwd') || fpCurrentCwd();
+        var targetSid = chip.getAttribute('data-fpsid') || '';
+        var fileUrl = '/api/file?cwd=' + encodeURIComponent(targetCwd)
+          + '&path=' + encodeURIComponent(path)
+          + '&name=' + encodeURIComponent(name);
+        // 会话透传：让服务端按宿主投影核验越界读取授权（空 sid 时 URL 与旧版逐字一致）
+        if (targetSid) fileUrl += '&session=' + encodeURIComponent(targetSid);
         return {
-          url: '/api/file?cwd=' + encodeURIComponent(targetCwd)
-            + '&path=' + encodeURIComponent(path)
-            + '&name=' + encodeURIComponent(name),
+          url: fileUrl,
           name: name,
           mediaType: mediaType
         };
@@ -9772,7 +9782,30 @@
         }
         var msg = '读取失败';
         if (st === 400) msg = '工作区尚未就绪，请稍后重试';
-        else if (st === 403) msg = '该文件不在当前工作区内，已拒绝读取';
+        else if (st === 403) {
+          // 服务端授权码 → 文案映射（契约 §1.5）。解析保守：任何异常都退回原文案。
+          var fpErrCode = '';
+          try {
+            var fpErrText = xhr.responseText || '';
+            if (fpErrText) {
+              var fpErrJson = JSON.parse(fpErrText);
+              if (fpErrJson && fpErrJson.code) fpErrCode = String(fpErrJson.code);
+            }
+          } catch (eFc) { fpErrCode = ''; }
+          if (fpErrCode === 'PREVIEW_PERMISSION_REQUIRED' || fpErrCode === 'PREVIEW_OUT_OF_SCOPE') {
+            msg = '该文件在当前工作区外，需会话「完全权限」才能预览';
+          } else if (fpErrCode === 'PREVIEW_SESSION_MISMATCH') {
+            msg = '无法核验该文件的读取授权';
+          } else if (fpErrCode === 'PREVIEW_POLICY_UNAVAILABLE') {
+            msg = '宿主离线，无法核验会话权限';
+          } else if (fpErrCode === 'PREVIEW_SENSITIVE_PATH') {
+            msg = '该文件属于敏感路径，不允许预览';
+          } else if (fpErrCode === 'PREVIEW_NOT_IN_DELIVERABLES') {
+            msg = '该文件不属于本会话交付物，不可预览';
+          } else {
+            msg = '该文件不在当前工作区内，已拒绝读取';
+          }
+        }
         else if (st === 404) msg = '文件不存在或已被清理';
         else if (st === 413) msg = '文件过大，无法完整预览';
         else if (st === 415) msg = '该类型不支持预览（仅支持图片 / txt / md）';
@@ -9881,6 +9914,7 @@
           card.setAttribute('data-fppath', item.path);
           card.setAttribute('data-fpkind', item.kind || (fpIsImage(item.path) ? 'image' : 'file'));
           card.setAttribute('data-fpcwd', sessionCwd || fpCurrentCwd());
+          card.setAttribute('data-fpsid', fpCurrentSid());
         } else {
           card.className = 'deliverable-card deliverable-card-static';
         }

@@ -1,0 +1,92 @@
+# Q20 验收套件 PREVIEW-POLICY (A1–A9) — 契约 .dev-team/contract-wave-2026-11-06.md
+# 时间: 2026-11-06T01:13:13.925Z
+# 红相：lib/preview-policy.mjs 为一行 throw 空桩时 A1–A5/A8/A9 必须真实断言失败；
+#       A6/A7 是既有行为的向后兼容护栏（实施前即绿，实施后必须保持绿）。
+▶ [PREVIEW-POLICY] A1 快路径 a：contained+registered → 200，快路径不看 session/permission
+  ✔ PASS [0.24ms] A1 快路径 a：contained+registered → 200，快路径不看 session/permission — 4 组快路径判定全部 200 且 code/error 为空串
+▶ [PREVIEW-POLICY] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d）
+  ✔ PASS [0.07ms] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d） — 4 组均 403 PREVIEW_OUT_OF_SCOPE + path escapes the workspace root
+▶ [PREVIEW-POLICY] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行
+  ✔ PASS [0.15ms] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行 — c 步 5 组判定（命中/不命中/归属无法核验/未知）符合冻结真值表
+▶ [PREVIEW-POLICY] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED
+  ✔ PASS [0.22ms] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED — 6 组非完全权限全部 403 PREVIEW_PERMISSION_REQUIRED + 1 组完全权限 200
+▶ [PREVIEW-POLICY] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝
+  ✔ PASS [0.16ms] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝 — 合法全通 200 + T2 语义 200 + 9 组畸形输入不 throw 且 403
+▶ [PREVIEW-POLICY] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致
+  ✔ PASS [342.04ms] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致 — out=403 54B 逐字节等价; in=200 16B 内容一致; RPC=0
+▶ [PREVIEW-POLICY] A6b 未注册工作区（无 session）：403 且响应体为契约 R-3 接受集合之一（不含 code）
+  ✔ PASS [321.19ms] A6b 未注册工作区（无 session）：403 且响应体为契约 R-3 接受集合之一（不含 code） — 未注册 cwd → 403（b 步文案）
+▶ [PREVIEW-POLICY] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次）
+  ✔ PASS [320.81ms] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次） — in=200 16B; session/projections RPC=0
+▶ [PREVIEW-POLICY] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致
+  ✔ PASS [322.8ms] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致 — out=200 31B; CT=text/plain; charset=utf-8; 与区内读取字节一致
+▶ [PREVIEW-POLICY] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+  ✔ PASS [319.67ms] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn — 403 PREVIEW_POLICY_UNAVAILABLE; warn 命中 [PREVIEW] sid=session-a9-1a
+▶ [PREVIEW-POLICY] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+  ✔ PASS [317.65ms] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝） — 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）; warn 命中 sid
+▶ [PREVIEW-POLICY] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED
+  ✔ PASS [323.59ms] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED — 403 PREVIEW_PERMISSION_REQUIRED
+▶ [PREVIEW-POLICY] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH
+  ✔ PASS [326.78ms] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH — 403 PREVIEW_SESSION_MISMATCH
+▶ [PREVIEW-POLICY] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）
+  ✔ PASS [331.36ms] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限） — 415 unsupported preview type; 413 file too large (maxBytes=2097152)
+▶ [PREVIEW-POLICY] A10a 越界敏感路径 denylist（6 类凭据/配置文件）→ 403 PREVIEW_SENSITIVE_PATH 且无字节出网
+  ✔ PASS [327.13ms] A10a 越界敏感路径 denylist（6 类凭据/配置文件）→ 403 PREVIEW_SENSITIVE_PATH 且无字节出网 — .credentials.yaml=403, cordis.patch.yml=403, settings.yaml=403, vertex.pem=403, aws.key=403, .env.yaml=403
+▶ [PREVIEW-POLICY] A10b 对照组：越界普通 notes.md 仍 200（denylist 不得误杀）；越界普通 .bin 仍 415（见 A9.4）
+  ✔ PASS [319.22ms] A10b 对照组：越界普通 notes.md 仍 200（denylist 不得误杀）；越界普通 .bin 仍 415（见 A9.4） — notes.md=200 (14B)；同目录 .credentials.yaml 仍 403（见 A10a）
+▶ [PREVIEW-POLICY] A10c 工作区内快路径不受 denylist 影响：区内 .credentials.yaml 仍 200；区内 .q20_token 仍 415
+  ✔ PASS [320.36ms] A10c 工作区内快路径不受 denylist 影响：区内 .credentials.yaml 仍 200；区内 .q20_token 仍 415 — inside .credentials.yaml=200; inside .q20_token=415
+▶ [PREVIEW-POLICY] A10d 无 session 越界命中敏感文件 → 403 且响应体不含 code（R-2 一致）
+  ✔ PASS [317.94ms] A10d 无 session 越界命中敏感文件 → 403 且响应体不含 code（R-2 一致） — 403 无 code（error=preview of sensitive files is not allowed）
+▶ [PREVIEW-POLICY] A11 workingDirectory 不可核验（~/ws-x 非绝对/不可 realpath）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+  ✔ PASS [318.51ms] A11 workingDirectory 不可核验（~/ws-x 非绝对/不可 realpath）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn — 403 PREVIEW_POLICY_UNAVAILABLE; warn 命中 sid
+▶ [PREVIEW-POLICY] A12 未注册 cwd + 目标不存在 → 403 越界文案（不得 404 存在性探针）；已注册 + 目标不存在 → 404 不变
+  ✔ PASS [320.96ms] A12 未注册 cwd + 目标不存在 → 403 越界文案（不得 404 存在性探针）；已注册 + 目标不存在 → 404 不变 — 未注册+不存在=403 越界文案; 已注册+不存在=404 preview file not found
+▶ [PREVIEW-POLICY] A14a 越界文件在交付物清单内（完全权限 + 同 cwd）→ 200 且内容一致
+  ✔ PASS [320.22ms] A14a 越界文件在交付物清单内（完全权限 + 同 cwd）→ 200 且内容一致 — in-list=200 (19B)
+▶ [PREVIEW-POLICY] A14b 同参数但文件不在清单内（同扩展名 .md）→ 403 PREVIEW_NOT_IN_DELIVERABLES 且无字节出网
+  ✔ PASS [321ms] A14b 同参数但文件不在清单内（同扩展名 .md）→ 403 PREVIEW_NOT_IN_DELIVERABLES 且无字节出网 — unlisted=403 PREVIEW_NOT_IN_DELIVERABLES
+▶ [PREVIEW-POLICY] A14c 清单项为相对路径（相对 sessionCwd）→ 归一后命中 → 200（证明归一语义）
+  ✔ PASS [320.51ms] A14c 清单项为相对路径（相对 sessionCwd）→ 归一后命中 → 200（证明归一语义） — relative(../../../q20-a14c-out-mabW4w/a14c-rel.md)=200
+▶ [PREVIEW-POLICY] A14d 工作区内文件即使不在清单内 → 仍 200（快路径不受成员闸门影响）
+  ✔ PASS [321.91ms] A14d 工作区内文件即使不在清单内 → 仍 200（快路径不受成员闸门影响） — in-workspace not-listed=200（有/无 session 均 200）
+▶ [PREVIEW-POLICY] A14e 无合法 session + 越界命中清单 → 403 旧文案（不含 code，R-2 一致）
+  ✔ PASS [319.13ms] A14e 无合法 session + 越界命中清单 → 403 旧文案（不含 code，R-2 一致） — no-session=403 逐字节等价（清单不改变无 session 语义）
+▶ [PREVIEW-POLICY] A14f 相对清单项 + 无会话 cwd → 403 fail-closed（不得拿调用方给的请求 cwd 归一；对照组有 cwd 时 200）
+  ✔ PASS [630.92ms] A14f 相对清单项 + 无会话 cwd → 403 fail-closed（不得拿调用方给的请求 cwd 归一；对照组有 cwd 时 200） — 无 cwd=403 PREVIEW_NOT_IN_DELIVERABLES; 有 cwd=200
+▶ [PREVIEW-POLICY] A15 合法 session + 未注册 cwd + 目标不存在 → 403（不得 404）；已注册 + 不存在 → 404 不变
+  ✔ PASS [319.23ms] A15 合法 session + 未注册 cwd + 目标不存在 → 403（不得 404）；已注册 + 不存在 → 404 不变 — 未注册+不存在(合法 session)=403 PREVIEW_OUT_OF_SCOPE; 已注册+不存在=404
+▶ [PREVIEW-POLICY] A13 客户端接线静态断言：data-fpsid ×2 + &session= 拼接 + 403 code→文案映射（含 SENSITIVE / NOT_IN_DELIVERABLES）
+  ✔ PASS [4.05ms] A13 客户端接线静态断言：data-fpsid ×2 + &session= 拼接 + 403 code→文案映射（含 SENSITIVE / NOT_IN_DELIVERABLES） — data-fpsid=3 处; &session= 拼接命中; code 映射 5/5
+
+──────── PREVIEW-POLICY 报告 ────────
+✔ PASS [0.24ms] A1 快路径 a：contained+registered → 200，快路径不看 session/permission
+✔ PASS [0.07ms] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d）
+✔ PASS [0.15ms] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行
+✔ PASS [0.22ms] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED
+✔ PASS [0.16ms] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝
+✔ PASS [342.04ms] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致
+✔ PASS [321.19ms] A6b 未注册工作区（无 session）：403 且响应体为契约 R-3 接受集合之一（不含 code）
+✔ PASS [320.81ms] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次）
+✔ PASS [322.8ms] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致
+✔ PASS [319.67ms] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+✔ PASS [317.65ms] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+✔ PASS [323.59ms] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED
+✔ PASS [326.78ms] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH
+✔ PASS [331.36ms] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）
+✔ PASS [327.13ms] A10a 越界敏感路径 denylist（6 类凭据/配置文件）→ 403 PREVIEW_SENSITIVE_PATH 且无字节出网
+✔ PASS [319.22ms] A10b 对照组：越界普通 notes.md 仍 200（denylist 不得误杀）；越界普通 .bin 仍 415（见 A9.4）
+✔ PASS [320.36ms] A10c 工作区内快路径不受 denylist 影响：区内 .credentials.yaml 仍 200；区内 .q20_token 仍 415
+✔ PASS [317.94ms] A10d 无 session 越界命中敏感文件 → 403 且响应体不含 code（R-2 一致）
+✔ PASS [318.51ms] A11 workingDirectory 不可核验（~/ws-x 非绝对/不可 realpath）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+✔ PASS [320.96ms] A12 未注册 cwd + 目标不存在 → 403 越界文案（不得 404 存在性探针）；已注册 + 目标不存在 → 404 不变
+✔ PASS [320.22ms] A14a 越界文件在交付物清单内（完全权限 + 同 cwd）→ 200 且内容一致
+✔ PASS [321ms] A14b 同参数但文件不在清单内（同扩展名 .md）→ 403 PREVIEW_NOT_IN_DELIVERABLES 且无字节出网
+✔ PASS [320.51ms] A14c 清单项为相对路径（相对 sessionCwd）→ 归一后命中 → 200（证明归一语义）
+✔ PASS [321.91ms] A14d 工作区内文件即使不在清单内 → 仍 200（快路径不受成员闸门影响）
+✔ PASS [319.13ms] A14e 无合法 session + 越界命中清单 → 403 旧文案（不含 code，R-2 一致）
+✔ PASS [630.92ms] A14f 相对清单项 + 无会话 cwd → 403 fail-closed（不得拿调用方给的请求 cwd 归一；对照组有 cwd 时 200）
+✔ PASS [319.23ms] A15 合法 session + 未注册 cwd + 目标不存在 → 403（不得 404）；已注册 + 不存在 → 404 不变
+✔ PASS [4.05ms] A13 客户端接线静态断言：data-fpsid ×2 + &session= 拼接 + 403 code→文案映射（含 SENSITIVE / NOT_IN_DELIVERABLES）
+合计: 28 用例, PASS 28, FAIL 0, SKIP(degraded) 0
+SUITE-PREVIEW-POLICY SUMMARY: total=28 pass=28 fail=0 degraded=0

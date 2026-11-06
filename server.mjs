@@ -6,6 +6,7 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { decidePreviewReadAccess } from './lib/preview-policy.mjs';
 import { createStreamFold } from './lib/stream-fold.mjs';
 import { createHostLiveState } from './lib/host-live-state.mjs';
 import { createSessionEventHandler as createSessionEventHandlerImpl } from './lib/session-events.mjs';
@@ -238,6 +239,7 @@ function mockCreateSession(sid, workspaceId) {
 // ─────────────────────────────────────────────────────────────────────────────
 // §1.4 mock 宿主测试接缝（仅 Q20_MOCK_HOST=1 分支读取；生产路径绝不读取）
 //   Q20_MOCK_HOST_RUNNING_SESSIONS / LIST_DELAY_MS / LIST_FAIL / SUBAGENTS / RPC_LOG
+//   / PROJECTIONS_FAIL / PROJECTIONS_DELAY_MS
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -358,20 +360,98 @@ function mockSessionListItems() {
   return items;
 }
 
+/** §1.4 接缝：`session/projections` 注入失败（=1 → 该 RPC 一律失败）。生产路径绝不读取。 */
+function mockSeamProjectionsFail() {
+  return process.env.Q20_MOCK_HOST_PROJECTIONS_FAIL === '1';
+}
+
+/** §1.4 接缝：`session/projections` 注入延迟（毫秒）。生产路径绝不读取。 */
+function mockSeamProjectionsDelayMs() {
+  const n = Number(process.env.Q20_MOCK_HOST_PROJECTIONS_DELAY_MS || 0);
+  return (Number.isFinite(n) && n > 0) ? n : 0;
+}
+
 /**
- * mock RPC 入口（仅 Q20_MOCK_HOST=1）：写 RPC 收据 + 施加 §1.4 的 session/list 注入。
+ * mock RPC 入口（仅 Q20_MOCK_HOST=1）：写 RPC 收据 + 施加 §1.4 的 session/list、
+ * session/projections 注入，并按契约 M-1 与生产同语义执行 `timeoutMs`
+ * （到点即 resolve `{ ok:false, error:'timeout', unreachable:true }`，绝不真阻塞）。
  * 生产路径绝不经过本函数。
  */
-function mockHandleRpcAsync(method, request) {
+function mockHandleRpcAsync(method, request, timeoutMs) {
   mockNoteRpc(method, request);
-  if (method !== 'session/list') return Promise.resolve(mockHandleRpc(method, request));
-  const fail = process.env.Q20_MOCK_HOST_LIST_FAIL === '1';
-  const delay = Number(process.env.Q20_MOCK_HOST_LIST_DELAY_MS || 0);
-  const respond = () => (fail ? { ok: false, error: 'mock: session/list injected failure' } : mockHandleRpc(method, request));
-  if (Number.isFinite(delay) && delay > 0) {
-    return new Promise((resolve) => { setTimeout(() => resolve(respond()), delay); });
+  let work;
+  if (method === 'session/list') {
+    const fail = process.env.Q20_MOCK_HOST_LIST_FAIL === '1';
+    const delay = Number(process.env.Q20_MOCK_HOST_LIST_DELAY_MS || 0);
+    const respond = () => (fail ? { ok: false, error: 'mock: session/list injected failure' } : mockHandleRpc(method, request));
+    work = (Number.isFinite(delay) && delay > 0)
+      ? mockDelayedRpc(respond, delay)
+      : { promise: Promise.resolve(respond()), cancel: () => {} };
+  } else if (method === 'session/projections') {
+    const fail = mockSeamProjectionsFail();
+    const delay = mockSeamProjectionsDelayMs();
+    const respond = () => (fail
+      ? { ok: false, error: 'mock: session/projections injected failure' }
+      : mockHandleRpc(method, request));
+    work = (delay > 0)
+      ? mockDelayedRpc(respond, delay)
+      : { promise: Promise.resolve(respond()), cancel: () => {} };
+  } else {
+    return Promise.resolve(mockHandleRpc(method, request));
   }
-  return Promise.resolve(respond());
+  return mockApplyRpcTimeout(work.promise, timeoutMs, work.cancel);
+}
+
+/**
+ * 契约 §1.4 M-2（mock-only 资源卫生）：注入延迟的定时器必须 unref，并把 cancel 句柄交回，
+ * 让「超时胜出」分支能把它 clear 掉——否则超时后仍有活动 Timeout，进程退出被延迟到注入值。
+ */
+function mockDelayedRpc(respond, delayMs) {
+  let timer = null;
+  const promise = new Promise((resolve) => {
+    timer = setTimeout(() => { timer = null; resolve(respond()); }, delayMs);
+  });
+  if (timer && typeof timer.unref === 'function') timer.unref();
+  return {
+    promise,
+    cancel: () => {
+      if (!timer) return;
+      clearTimeout(timer);
+      timer = null;
+    },
+  };
+}
+
+/**
+ * 契约 §1.4 M-1：mock 分支必须与生产同语义执行 `timeoutMs`
+ * （生产由 http.request 的 timeout 生效，见 callDshWebRpc）。
+ * 超时语义与生产逐字一致：resolve `{ ok:false, error:'timeout', unreachable:true }`；
+ * M-2：超时胜出时调用 `cancel()` 取消底层注入延迟定时器。
+ */
+function mockApplyRpcTimeout(promise, timeoutMs, cancel) {
+  const limit = Number(timeoutMs);
+  if (!Number.isFinite(limit) || limit <= 0) return promise;
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (typeof cancel === 'function') cancel();
+      resolve({ ok: false, error: 'timeout', unreachable: true });
+    }, limit);
+    if (typeof timer.unref === 'function') timer.unref();
+    Promise.resolve(promise).then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }, (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok: false, error: (err && err.message) ? err.message : String(err) });
+    });
+  });
 }
 
 function mockHandleRpc(method, request) {
@@ -974,9 +1054,9 @@ async function callDshWebArchiveSession(sessionId) {
  * 返回 { ok:true, value } / { ok:false, unreachable:true, error } / { ok:false, error }。
  */
 function callDshWebRpc(method, request, timeoutMs = 8000, opts = {}) {
-  // mock 宿主：短路到进程内注册表，绝无真实网络/LLM 链路。
+  // mock 宿主：短路到进程内注册表，绝无真实网络/LLM 链路（timeoutMs 仍按生产同语义执行）。
   if (Q20_MOCK_HOST) {
-    return mockHandleRpcAsync(method, request);
+    return mockHandleRpcAsync(method, request, timeoutMs);
   }
   return new Promise((resolve) => {
     try {
@@ -4187,26 +4267,31 @@ function servePreviewFile(req, res, absolutePath, gateName, cacheControl) {
 }
 
 /**
- * Resolve a markdown-referenced workspace file inside the sandbox of one
- * registered workspace: realpath both sides and require containment, so `..`
- * segments and symlinks can never escape the workspace root.
- * @returns {{ ok: true, path: string } | { ok: false, status: number, error: string }}
+ * Collect the realpath facts of one markdown-referenced workspace file: realpath both
+ * sides so `..` segments and symlinks can never escape the workspace root.
+ * 只收集事实（不判定授权）：`contained`/`rootReal` 交给 lib/preview-policy.mjs 的
+ * decidePreviewReadAccess 与宿主会话策略一起裁决。
+ * @returns {{ ok: true, rootReal: string, path: string, contained: boolean }
+ *   | { ok: false, status: number, error: string }}
  */
-function resolveWorkspacePreviewPath(cwdRaw, filePathRaw) {
+function resolvePreviewRequestRoot(cwdRaw, filePathRaw) {
   if (!cwdRaw || !filePathRaw) return { ok: false, status: 400, error: 'Missing "cwd" or "path"' };
-  let rootReal;
   try {
-    rootReal = fs.realpathSync(path.resolve(String(cwdRaw)));
+    return { ok: true, rootReal: fs.realpathSync(path.resolve(String(cwdRaw))) };
   } catch {
     return { ok: false, status: 400, error: 'Invalid "cwd"' };
   }
-  let registered = false;
-  try {
-    registered = isRegisteredWorkspaceRoot(rootReal);
-  } catch {
-    registered = false;
-  }
-  if (!registered) return { ok: false, status: 403, error: 'workspace is not registered' };
+}
+
+/**
+ * Target realpath + containment fact of one markdown-referenced workspace file
+ * (`rootReal` is already realpath-resolved by resolvePreviewRequestRoot).
+ * Only the realpath facts are collected here — authorization lives in
+ * lib/preview-policy.mjs plus the out-of-scope/sensitive gates of /api/file.
+ * @returns {{ ok: true, path: string, contained: boolean }
+ *   | { ok: false, status: number, error: string }}
+ */
+function resolveWorkspacePreviewPath(rootReal, filePathRaw) {
   const requested = String(filePathRaw);
   const target = path.isAbsolute(requested) ? path.resolve(requested) : path.resolve(rootReal, requested);
   let targetReal;
@@ -4215,10 +4300,221 @@ function resolveWorkspacePreviewPath(cwdRaw, filePathRaw) {
   } catch {
     return { ok: false, status: 404, error: 'preview file not found' };
   }
-  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + path.sep)) {
-    return { ok: false, status: 403, error: 'path escapes the workspace root' };
+  const contained = targetReal === rootReal || targetReal.startsWith(rootReal + path.sep);
+  return { ok: true, path: targetReal, contained };
+}
+
+/**
+ * /api/file 可选 query `session` 的事实化取值（裁决 R-1：多值/重复参数一律非法）。
+ * 长度 ≠ 1 或未过 isValidSessionId → 空串（按「无 session」处理，零宿主调用）。
+ */
+function previewSessionIdParam(searchParams) {
+  const all = searchParams.getAll('session');
+  if (!Array.isArray(all) || all.length !== 1) return '';
+  const sid = all[0];
+  return isValidSessionId(sid) ? sid : '';
+}
+
+/**
+ * 宿主投影 → 越界读取授权事实（`session/projections` 只走既有 fetchSessionProjections，
+ * ≤PROJECTIONS_TIMEOUT_MS、复用正/负缓存与单飞，绝不新建第二条取数通道）。
+ * @returns {{ available: boolean, sessionCwd: string, permission: string }}
+ */
+async function previewPolicyFacts(sessionId) {
+  let values = null;
+  try {
+    values = await fetchSessionProjections(sessionId);
+  } catch {
+    values = null;
   }
-  return { ok: true, path: targetReal };
+  if (!values || typeof values !== 'object') {
+    return { available: false, reason: 'no-values', sessionCwd: '', permission: '' };
+  }
+  const permissions = (values.permissions && typeof values.permissions === 'object') ? values.permissions : null;
+  // R-7：缺 permissions / currentValue 非字符串 = 不可用（与「有值但权限不足」分界）。
+  if (!permissions || typeof permissions.currentValue !== 'string') {
+    return { available: false, reason: 'no-permissions', sessionCwd: '', permission: '' };
+  }
+  const permission = permissions.currentValue;
+  // R-5：只有「缺失/空串」才是未知（跳过 c 步）；非空但非绝对路径或 realpath 失败 = 不可核验 → fail-closed。
+  const wd = values.workingDirectory;
+  let sessionCwd = '';
+  if (wd !== undefined && wd !== null && wd !== '') {
+    if (typeof wd !== 'string' || !path.isAbsolute(wd)) {
+      return { available: false, reason: 'cwd-unresolvable', sessionCwd: '', permission: '' };
+    }
+    try {
+      sessionCwd = fs.realpathSync(wd);
+    } catch {
+      return { available: false, reason: 'cwd-unresolvable', sessionCwd: '', permission: '' };
+    }
+  }
+  return { available: true, reason: '', sessionCwd, permission };
+}
+
+/**
+ * R-8：越界读取的「本会话交付物」成员闸门（主闸门）。
+ * mock-only 接缝 Q20_MOCK_HOST_SESSION_DELIVERABLES = { "<sid>": ["<abs>"|"<relative to sessionCwd>"] }；
+ * 生产路径绝不读取（仅 Q20_MOCK_HOST=1 分支）。
+ */
+function mockSeamSessionDeliverables() {
+  const raw = process.env.Q20_MOCK_HOST_SESSION_DELIVERABLES;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 交付物条目归一：相对路径**只能**按会话 cwd 解析，再 realpath；失败/非字符串条目跳过。
+ * 会话 cwd 不可知（baseCwd 为空）时相对条目无法核验 → 一律忽略（绝不退化为请求 cwd 当基，
+ * 否则调用方可用自己给的 cwd 把清单外文件「算成成员」）；绝对路径条目不受影响。
+ */
+function normalizeSessionDeliverablePaths(list, baseCwd) {
+  const paths = new Set();
+  if (!Array.isArray(list)) return paths;
+  const hasBase = (typeof baseCwd === 'string') && baseCwd !== '';
+  for (const entry of list) {
+    if (typeof entry !== 'string' || entry === '') continue;
+    const absolute = path.isAbsolute(entry);
+    if (!absolute && !hasBase) continue;
+    try {
+      paths.add(fs.realpathSync(absolute ? entry : path.resolve(baseCwd, entry)));
+    } catch {
+      // 不存在/已删除的文件不可能成为预览目标
+    }
+  }
+  return paths;
+}
+
+const SESSION_DELIVERABLES_TTL_MS = 60000;
+const sessionDeliverablesCache = new Map(); // sid -> { stamp, at, paths:Set|null }
+
+/** 会话转录文件 stamp（`<mtimeMs>:<size>`）；无转录 → ''。只做 stat，不解压。 */
+function sessionTranscriptStamp(sessionCwd, sessionId) {
+  try {
+    const dir = findSessionDir(sessionCwd, sessionId);
+    if (!dir) return '';
+    const zstdPath = findSessionZstdPath(dir);
+    if (!zstdPath) return '';
+    const st = fs.statSync(zstdPath);
+    return String(st.mtimeMs) + ':' + String(st.size);
+  } catch {
+    // 日志卫生：只落稳定 reason 码，绝不拼接异常文本（可能含转录绝对路径）
+    console.warn(`[PREVIEW] transcript unavailable sid=${sessionId} reason=stat-failed path=<redacted>`);
+    return '';
+  }
+}
+
+/**
+ * R-8：该会话「交付物清单」的 realpath 集合（复用 getSessionHistory 的 `deliverables[].path`，
+ * 不新写转录解析器）。返回 null = 取不到清单（无转录/解析异常）→ 调用方必须 fail-closed。
+ * 缓存按 (sessionId, 转录 stamp) 失效，TTL ≤60s。
+ */
+function sessionDeliverablesPaths(sessionCwd, sessionId) {
+  const sid = (typeof sessionId === 'string') ? sessionId : '';
+  if (!sid) return null;
+  // 会话 cwd 仅取自宿主投影（'' = 不可知）；**不得**回退到请求 cwd（调用方可控）。
+  const baseCwd = (typeof sessionCwd === 'string') ? sessionCwd : '';
+  if (Q20_MOCK_HOST) {
+    const seam = mockSeamSessionDeliverables();
+    if (seam && Object.prototype.hasOwnProperty.call(seam, sid)) {
+      return normalizeSessionDeliverablePaths(seam[sid], baseCwd);
+    }
+  }
+  const stamp = sessionTranscriptStamp(baseCwd, sid);
+  const now = Date.now();
+  const cached = sessionDeliverablesCache.get(sid);
+  if (cached && cached.stamp === stamp && (now - cached.at) < SESSION_DELIVERABLES_TTL_MS) {
+    return cached.paths;
+  }
+  let paths = null;
+  try {
+    if (stamp) {
+      const history = getSessionHistory(baseCwd, sid);
+      if (Array.isArray(history)) {
+        paths = new Set();
+        for (const msg of history) {
+          const list = (msg && Array.isArray(msg.deliverables)) ? msg.deliverables : [];
+          for (const item of list) {
+            const entry = (item && typeof item.path === 'string') ? item.path : '';
+            if (!entry) continue;
+            try {
+              paths.add(fs.realpathSync(path.isAbsolute(entry) ? entry : path.resolve(baseCwd, entry)));
+            } catch {
+              // realpath 失败条目跳过（不存在/已删）
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // 日志卫生：只落稳定 reason 码（异常文本可能含转录绝对路径）
+    console.warn(`[PREVIEW] deliverables unavailable sid=${sid} reason=history-failed path=<redacted>`);
+    paths = null;
+  }
+  if (sessionDeliverablesCache.size > 500) sessionDeliverablesCache.clear();
+  sessionDeliverablesCache.set(sid, { stamp, at: now, paths });
+  return paths;
+}
+
+/** R-4 敏感路径 denylist（冻结表）；用于「非快路径」越界分支，工作区内快路径不受影响。 */
+const PREVIEW_SENSITIVE_BASENAMES = new Set([
+  '.credentials', '.credentials.yaml', '.credentials.yml', '.q20_token',
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', '.netrc', '.pgpass',
+  'cordis.patch.yml', 'settings.yaml', 'settings.yml',
+]);
+const PREVIEW_SENSITIVE_EXTS = new Set(['pem', 'key', 'p12', 'pfx', 'keystore', 'jks']);
+
+/** R-4 前缀判据：目录根（目录内任意深度都算敏感，按 realpath 形态比较）。 */
+function previewSensitivePrefixDirs() {
+  const dirs = [];
+  try {
+    const home = os.homedir();
+    if (home) dirs.push(path.join(home, '.ssh'), path.join(home, '.aws'), path.join(home, '.gnupg'));
+  } catch {
+    // 无 home：仅靠 basename/扩展名判据
+  }
+  return dirs;
+}
+
+/** R-4 前缀判据：`<DSH_HOME>/.credentials*` 形态（同名文件与同名目录一律敏感）。 */
+function previewSensitiveLoosePrefixes() {
+  if (typeof DSH_HOME !== 'string' || !DSH_HOME) return [];
+  return [path.join(DSH_HOME, '.credentials')];
+}
+
+/**
+ * R-4：目标 realpath 是否命中敏感路径 denylist（basename / 扩展名 / 前缀目录，大小写不敏感）。
+ * 纯函数式判定，无 IO 随机化副作用；命中即由 /api/file 在**判定前**拒绝且不发宿主 RPC。
+ */
+function isSensitivePreviewTarget(targetReal) {
+  try {
+    const target = String(targetReal || '');
+    if (!target) return false;
+    const base = path.basename(target).toLowerCase();
+    if (PREVIEW_SENSITIVE_BASENAMES.has(base)) return true;
+    if (/^\.env(\.|$)/.test(base)) return true;
+    const ext = fileExtLower(base);
+    if (ext && PREVIEW_SENSITIVE_EXTS.has(ext)) return true;
+    const lower = target.toLowerCase();
+    for (const dir of previewSensitivePrefixDirs()) {
+      const prefix = String(dir).toLowerCase();
+      if (!prefix) continue;
+      if (lower === prefix || lower.startsWith(prefix + path.sep)) return true;
+    }
+    for (const loose of previewSensitiveLoosePrefixes()) {
+      const prefix = String(loose).toLowerCase();
+      if (prefix && lower.startsWith(prefix)) return true;
+    }
+  } catch {
+    // 判定异常不得放行：保守返回 false 交给后续授权链（宿主策略仍是硬闸门）
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -6632,14 +6928,99 @@ const server = http.createServer((req, res) => {
 
   // Q20 消息内文件预览·通道②：注册工作区内的图片 / txt / md（markdown 引用）。
   // P0 安全：闸门只用服务端 realpath 结果的 basename；调用方 name 一律忽略。
+  // 授权：工作区包含性 + 会话文件策略（lib/preview-policy.mjs 冻结决策顺序 a→e）。
+  //   快路径（contained && registered）零宿主调用；否则带合法 session 时查一次
+  //   session/projections（≤2500ms，复用缓存），fail-closed 一律拒绝。
   if (req.method === 'GET' && pathname === '/api/file') {
-    const resolved = resolveWorkspacePreviewPath(searchParams.get('cwd') || '', searchParams.get('path') || '');
-    if (!resolved.ok) {
-      sendJson(res, resolved.status, { ok: false, error: resolved.error }, req);
+    // 拒绝一律是纯 JSON 体（绝不夹带文件字节）：显式 Content-Length 让「响应体只有 JSON
+    // 错误对象」可被物理核验。这些拒绝体恒 <GZIP_MIN_BYTES(1024)，gzip 分支绝不会介入。
+    // 裁决 R-2：无合法 session 的拒绝体不含 code（与旧路径逐字节等价）。
+    const sendPreviewReject = (status, body, withCode) => {
+      const payload = withCode ? body : { ok: false, error: body.error };
+      const text = JSON.stringify(payload);
+      sendJson(res, status, payload, req, { 'Content-Length': String(Buffer.byteLength(text, 'utf8')) });
+    };
+    // ① 请求 cwd 的 realpath（失败 → 400，与今天一致）。
+    const cwdRaw = searchParams.get('cwd') || '';
+    const filePathRaw = searchParams.get('path') || '';
+    const rootFacts = resolvePreviewRequestRoot(cwdRaw, filePathRaw);
+    if (!rootFacts.ok) {
+      sendPreviewReject(rootFacts.status, { ok: false, error: rootFacts.error });
       return;
     }
+    const rootReal = rootFacts.rootReal;
+    // ② 注册工作区判定。
+    let registered = false;
+    try {
+      registered = isRegisteredWorkspaceRoot(rootReal);
+    } catch {
+      registered = false;
+    }
+    // ③ 裁决 R-1：缺失/重复/非法 session 一律按「无 session」处理（零宿主调用）。
+    const sessionId = previewSessionIdParam(searchParams);
+    // ④ 裁决 R-6：未注册 cwd + 无合法 session → 立即 403（**先于**目标 realpath，
+    //    否则「目标不存在 404 / 存在 403」会构成任意路径的存在性 oracle）。
+    if (!registered && !sessionId) {
+      sendPreviewReject(403, { ok: false, error: 'path escapes the workspace root' });
+      return;
+    }
+    // ⑤⑥ 目标 realpath 与包含性：registered 分支失败 → 404；
+    //    裁决 R-9：!registered 分支 realpath 失败不得 404（存在性 oracle），一律先 403。
+    const facts = resolveWorkspacePreviewPath(rootReal, filePathRaw);
+    if (!facts.ok) {
+      if (!registered) {
+        sendPreviewReject(403, { ok: false, code: 'PREVIEW_OUT_OF_SCOPE', error: 'path escapes the workspace root' }, !!sessionId);
+        return;
+      }
+      sendPreviewReject(facts.status, { ok: false, error: facts.error });
+      return;
+    }
+    const fastPath = facts.contained === true && registered === true;
+    // ⑦ 裁决 R-4：敏感路径 denylist **仅非快路径**生效（工作区内行为与今天完全一致），
+    //    命中即拒绝且零宿主 RPC。
+    if (!fastPath && isSensitivePreviewTarget(facts.path)) {
+      sendPreviewReject(403, { ok: false, code: 'PREVIEW_SENSITIVE_PATH', error: 'preview of sensitive files is not allowed' }, !!sessionId);
+      return;
+    }
+    // ⑧ 仅当快路径不成立且有合法 session 时才取宿主投影（R-5/R-7 口径见 previewPolicyFacts）。
+    let sessionCwd = '';
+    let permission = '';
+    if (!fastPath && sessionId) {
+      const policy = await previewPolicyFacts(sessionId);
+      if (!policy.available) {
+        // 缺数据=拒绝：宿主不可用/超时/归属不可核验一律 fail-closed，错误细节不出网。
+        console.warn(`[PREVIEW] policy unavailable sid=${sessionId} reason=${policy.reason} path=<redacted>`);
+        sendPreviewReject(403, { ok: false, code: 'PREVIEW_POLICY_UNAVAILABLE', error: 'session permission is unavailable' }, true);
+        return;
+      }
+      sessionCwd = policy.sessionCwd;
+      permission = policy.permission;
+    }
+    const decision = decidePreviewReadAccess({
+      contained: facts.contained,
+      registered,
+      sessionId,
+      requestCwd: rootReal,
+      sessionCwd,
+      permission,
+    });
+    if (!decision.ok) {
+      sendPreviewReject(decision.status, { ok: false, code: decision.code, error: decision.error }, !!sessionId);
+      return;
+    }
+    // ⑨ 裁决 R-8（G4，主闸门，仅非快路径）：归属与权限都通过后，仍必须命中「本会话交付物清单」。
+    //    完全权限不等于可读全机任意文件；清单为空/取不到（无转录/解析失败）一律 fail-closed。
+    if (!fastPath) {
+      const deliverables = sessionDeliverablesPaths(sessionCwd, sessionId);
+      if (!deliverables || !deliverables.has(facts.path)) {
+        sendPreviewReject(403,
+          { ok: false, code: 'PREVIEW_NOT_IN_DELIVERABLES', error: 'file is not part of this session deliverables' },
+          !!sessionId);
+        return;
+      }
+    }
     // 工作区文件可变：不缓存（内容敏感，改一次就该看到新内容）
-    servePreviewFile(req, res, resolved.path, path.basename(resolved.path), 'private, no-cache');
+    servePreviewFile(req, res, facts.path, path.basename(facts.path), 'private, no-cache');
     return;
   }
 

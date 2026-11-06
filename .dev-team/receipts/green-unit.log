@@ -1,0 +1,266 @@
+▶ [UNIT] Token Stats Fold Contract (lib/token-stats.mjs, dsh aligned)
+  ✔ PASS (1ms)
+▶ [UNIT] Stream Fold Ordering Contract (lib/stream-fold.mjs, dsh aligned)
+  ✔ PASS (5ms)
+▶ [UNIT] Zstd Multi-Frame Decompression & Frame Scanning
+  ✔ PASS (2ms)
+▶ [UNIT] Session Terminal State Multi-Turn Precedence (Latest Turn Contract)
+  ✔ PASS (0ms)
+▶ [UNIT] HTTP API Input Validation (400 Boundaries)
+  ✔ PASS (68ms)
+▶ [UNIT] Workspace Create Single-Name Contract (~/ + 409 + ES5 wiring)
+  ✔ PASS (219ms)
+▶ [UNIT] Workspace Remove Unregister-Only Contract (D + confirm)
+  ✔ PASS (18ms)
+▶ [UNIT] Ungrouped Sessions Contract (dsh web aligned)
+  ✔ PASS (219ms)
+▶ [UNIT] C-key enters All-Workspaces Running view (trap fix contract)
+  ✔ PASS (3ms)
+▶ [UNIT] ask_user_question Question Bridge Contract (endpoint + pure logic)
+  ✔ PASS (6ms)
+▶ [UNIT] ask_user_question Cross-Session Isolation (classifyQuestionFrame)
+  ✔ PASS (0ms)
+▶ [UNIT] Tool Title Zh Mapping Contract (dsh web tool.title.*)
+  ✔ PASS (3ms)
+▶ [UNIT] Top Banner Notification Contract (done/error, fold > 3, dismiss, state transitions)
+  ✔ PASS (4ms)
+▶ [UNIT] Ask Multi-Session Isolation Contract (replay filter + draft slots + zh stale-error)
+  ✔ PASS (4ms)
+▶ [UNIT] Session Model Isolation Contract (O panel + badge + switch restore)
+  ✔ PASS (4ms)
+▶ [UNIT] Favorite Models Contract (Shortcut M / F / 常用 Section)
+  ✔ PASS (3ms)
+▶ [UNIT] Default Model Contract (Shortcut M / D / Anti-Drift Lock)
+  ✔ PASS (3ms)
+▶ [UNIT] Quick Messages Panel Contract (Default Templates, Add, Deduplication & Storage)
+  ✔ PASS (3ms)
+▶ [UNIT] Non-existent Session History Defense (Safe Empty Result)
+  ✔ PASS (22ms)
+▶ [UNIT] Turn-based History Slicing & Boundary Defense (/api/history?turns=...)
+  ✔ PASS (16ms)
+▶ [UNIT] Bootstrap API Contract & Panel Count Consistency
+  ✔ PASS (309ms)
+▶ [UNIT] Model Catalog Source Contract (settings.yaml → profile patch)
+  ✔ PASS (9ms)
+▶ [UNIT] Sessions List Projection & State Semantics Contract
+  ✔ PASS (1ms)
+▶ [UNIT] Session Statistics API Contract & Metrics (/api/session/stats)
+  ✔ PASS (70ms)
+▶ [UNIT] Session Goal Contract (goal endpoint + red ring + O panel)
+  ✔ PASS (30ms)
+▶ [UNIT] Subagents / Agent Team / Background Tasks API Contract (/api/session/subagents)
+  ✔ PASS (168ms)
+▶ [UNIT] Subagent lite lazy-load mapping contract (lib/subagent-lite.mjs)
+  ✔ PASS (1ms)
+▶ [UNIT] Subagents endpoint lite=1 envelope contract
+  ✔ PASS (86ms)
+▶ [UNIT] U-panel team projection precedence (lib/agent-team-projection.mjs)
+  ✔ PASS (1ms)
+▶ [UNIT] U-panel team roster backfill via session/projections
+  ✔ PASS (774ms)
+▶ [UNIT] Frozen live agentTeam must not shadow fresh snapshot team projection
+  ✔ PASS (772ms)
+▶ [UNIT] Session FSM & Tail Status Text Sanitization Contract
+  ✔ PASS (6ms)
+▶ [UNIT] P0 Perf/Security Optimization Contract (gzip / ETag / sessionId / logout)
+  ✔ PASS (46ms)
+▶ [UNIT] Availability Hardening Contract (/healthz probe + listen guard)
+  ✔ PASS (4ms)
+▶ [UNIT] Running Send Queue/Steer Mode Contract (/api/session/prompt + Q shortcut)
+  ✔ PASS (4175ms)
+▶ [UNIT] Message File Preview Contract (image/txt/md fullscreen preview)
+  ✔ PASS (77ms)
+▶ [UNIT] Message File Preview render logic (pure ES5 chip rules)
+  ✔ PASS (4ms)
+▶ [UNIT] DSH Process Down / Crash Indicator Contract
+  ✔ PASS (7ms)
+▶ [UNIT] Tree Modals Container Click Delegation & Signature Contract
+  ✔ PASS (3ms)
+
+======================================================
+              UNIT TEST SUITE REPORT                  
+======================================================
+✔ PASS [   1ms] : Token Stats Fold Contract (lib/token-stats.mjs, dsh aligned)
+    - foldReplace: true
+    - billedInput: 1050
+    - pressureExcludesOutput: true
+    - streamFallback: true
+    - hitNeverRoundsTo100: 99.99
+✔ PASS [   5ms] : Stream Fold Ordering Contract (lib/stream-fold.mjs, dsh aligned)
+    - fold: ["held","surfaceOp-guard","rebaseline-keeps-pending","flush","duplicate","abandonment"]
+    - handler: ["no-double-delta","flush-held","abandon-rollback","usage-decoupled","sdk-publish"]
+    - wire: ["assistantStream x2","single-channel","reasoning-delta","task-seq-on-wire","replay-sort"]
+✔ PASS [   2ms] : Zstd Multi-Frame Decompression & Frame Scanning
+    - fixtureBytes: 8396
+    - detectedFrames: 23
+    - decompressedLines: 59
+    - sessionId: session-ce34d9af-03ca-48e4-b24b-430438d09463
+✔ PASS [   0ms] : Session Terminal State Multi-Turn Precedence (Latest Turn Contract)
+    - casesTested: 4
+    - errorThenDone: done
+    - doneThenError: error
+    - errorThenAborted: stopped
+    - errorThenIncomplete: stopped
+✔ PASS [  68ms] : HTTP API Input Validation (400 Boundaries)
+    - validatedEndpoints: ["/api/chat/stream","/api/sessions","/api/history","/api/session/archive","/api/session","/api/chat/cancel","/api/session/attach","/api/session/stats","/api/session/goal","/api/session/subagents","/api/session/upload"]
+    - allAnswered400: true
+✔ PASS [ 219ms] : Workspace Create Single-Name Contract (~/ + 409 + ES5 wiring)
+    - badCases: 18
+    - probeCreated: q20unit-2bqsm-mw4a6jhx-xcu8t
+    - residueClean: true
+✔ PASS [  18ms] : Workspace Remove Unregister-Only Contract (D + confirm)
+    - probeRemoved: q20rm-2bqsm-mw4a6jic
+    - folderKept: true
+✔ PASS [ 219ms] : Ungrouped Sessions Contract (dsh web aligned)
+    - ungroupedCount: 6
+    - registeredLeakCheck: 2545
+✔ PASS [   3ms] : C-key enters All-Workspaces Running view (trap fix contract)
+    - cOpensRunningView: true
+    - trapFixed: true
+    - bubbleRemoved: true
+✔ PASS [   6ms] : ask_user_question Question Bridge Contract (endpoint + pure logic)
+    - endpointGuards: ["400 missing envelope","400 invalid action","ghost ok:false"]
+    - pureLogic: ["parseRecommendedLabel en/zh/plain","validateQuestionItems valid/dup/missing","parseAskQuestionsFromArgs","parseAskAnswersFromOutput"]
+✔ PASS [   0ms] : ask_user_question Cross-Session Isolation (classifyQuestionFrame)
+    - cases: ["foreign(other session)","own(same session)","defensive empty ids","skip unrelated/malformed"]
+✔ PASS [   3ms] : Tool Title Zh Mapping Contract (dsh web tool.title.*)
+    - titles: ["bash→Bash","read→读取","read_image→读取图片","web_search→网页搜索","web_fetch→网页获取","grep→Grep","glob→Glob","write→写入","edit→编辑","run_code→代码","todo_write→任务","ask_user_question→提问"]
+    - fallback: ["工具调用","name · summary"]
+✔ PASS [   4ms] : Top Banner Notification Contract (done/error, fold > 3, dismiss, state transitions)
+    - filterGuards: ["running ignored","stopped ignored"]
+    - completionsTracked: ["done ✓","error ✖"]
+    - deduplicationOk: true
+    - maxVisibleFold: 3 visible + fold bar
+    - expandOk: true
+    - dismissOk: true
+    - backgroundTransitionOk: true
+✔ PASS [   4ms] : Ask Multi-Session Isolation Contract (replay filter + draft slots + zh stale-error)
+    - serverGuards: ["replay filters question request","bridge carries pendingQuestion"]
+    - clientGuards: ["draft slots per session","cross-session request banner-only","replayed never overwrites","stale error zh + draft kept"]
+✔ PASS [   4ms] : Session Model Isolation Contract (O panel + badge + switch restore)
+    - pureLogic: ["record/get roundtrip","empty guard","cap 40 evict-oldest"]
+    - wiring: ["O panel","M badge","switch restore","send bind","new-session late bind","M-panel pick","stats truth","dirty guard","start ack clears dirty","modelBadge.onclick","wsBadge.onclick"]
+✔ PASS [   3ms] : Favorite Models Contract (Shortcut M / F / 常用 Section)
+    - initialEmpty: true
+    - toggleAdd: true
+    - toggleRemove: true
+    - localStoragePersistence: true
+✔ PASS [   3ms] : Default Model Contract (Shortcut M / D / Anti-Drift Lock)
+    - initialEmpty: true
+    - saveDefaultModel: true
+    - applyDefaultModel: true
+    - localStoragePersistence: true
+    - ghostModelSafeFallback: true
+✔ PASS [   3ms] : Quick Messages Panel Contract (Default Templates, Add, Deduplication & Storage)
+    - defaultTemplatesLoaded: 7
+    - addSuccess: true
+    - deleteSuccess: true
+    - duplicateRejected: true
+    - emptyRejected: true
+    - persisted: true
+✔ PASS [  22ms] : Non-existent Session History Defense (Safe Empty Result)
+    - status: 200
+    - body: []
+    - turnsOk: true
+✔ PASS [  16ms] : Turn-based History Slicing & Boundary Defense (/api/history?turns=...)
+    - sessionId: session-mw4a6jqh64w2qo
+    - totalTurns: 1
+    - slice1Msgs: 2
+    - hasMore: false
+    - clampingDefenseVerified: true
+✔ PASS [ 309ms] : Bootstrap API Contract & Panel Count Consistency
+    - workspacesCount: 14
+    - modelsCount: 15
+    - currentWorkspace: <HOME>/dsh-q20-web
+    - sessionCount: 1
+    - consistencyVerified: true
+✔ PASS [   9ms] : Model Catalog Source Contract (settings.yaml → profile patch)
+    - patchModels: 4
+    - patchProviders: ["deepseek-official","ponyllm","ppx"]
+    - liveModels: 15
+    - liveProviders: 2
+    - hostRpcFirst: true
+✔ PASS [   1ms] : Sessions List Projection & State Semantics Contract
+    - sessionCount: 1
+    - activeSessionsSample: [{"id":"session-mw47e45cavblex","state":"running","title":"修复工作区外文件预览权限"}]
+✔ PASS [  70ms] : Session Statistics API Contract & Metrics (/api/session/stats)
+    - emptySessionHandled: true
+    - ghostSessionHandled: true
+    - realSessionMetrics: {"sessionId":"session-mw47e45cavblex","turns":1,"steps":237,"mode":"standard","tokens":"45073896 in / 118377 out","hitRate":"99%","speed":"181 tok/s"}
+✔ PASS [  30ms] : Session Goal Contract (goal endpoint + red ring + O panel)
+    - goalEndpoint400: true
+    - ghostGoalNull: true
+    - traversalGoalNull: true
+    - statsEmbedsGoal: true
+    - frontendWiring: ["red ring css","syncGoalRing","O panel goal row","L removed"]
+✔ PASS [ 168ms] : Subagents / Agent Team / Background Tasks API Contract (/api/session/subagents)
+    - workspaceSubagentsCount: 193
+    - parentSubagentsCount: 4
+    - contractVerified: true
+✔ PASS [   1ms] : Subagent lite lazy-load mapping contract (lib/subagent-lite.mjs)
+    - liteRowsKept: 2
+    - liteTasksKept: 2
+    - liteMapped: true
+✔ PASS [  86ms] : Subagents endpoint lite=1 envelope contract
+    - liteEnvelope: true
+    - litePagedEnvelope: true
+    - fullUnaffected: true
+✔ PASS [   1ms] : U-panel team projection precedence (lib/agent-team-projection.mjs)
+    - teamPrecedence: true
+    - catalogUnion: true
+✔ PASS [ 774ms] : U-panel team roster backfill via session/projections
+    - teammateBackfilled: true
+    - taskBoardBackfilled: 1
+✔ PASS [ 772ms] : Frozen live agentTeam must not shadow fresh snapshot team projection
+    - rosterSurvived: true
+    - taskBoardSurvived: 1
+    - backgroundTaskSurvived: true
+✔ PASS [   6ms] : Session FSM & Tail Status Text Sanitization Contract
+    - seqTokenGuardVerified: true
+    - terminalEventLatchVerified: true
+    - streamingPrecedenceVerified: true
+    - statusTailSanitizationVerified: true
+    - syncSessionPhaseVerified: true
+    - normalizeWaitingPrecedenceVerified: true
+    - unauthorizedRedirectVerified: true
+    - stoppedSessionCleanedOnSend: true
+✔ PASS [  46ms] : P0 Perf/Security Optimization Contract (gzip / ETag / sessionId / logout)
+    - gzipBootstrapVerified: true
+    - plainBootstrapUnchanged: true
+    - staticETag304Verified: true
+    - staticGzipVerified: true
+    - traversalBlockedVerified: true
+    - logoutContractVerified: true
+✔ PASS [   4ms] : Availability Hardening Contract (/healthz probe + listen guard)
+    - healthzVerified: true
+    - uaBypassVerified: true
+    - headVerified: true
+    - guardStructureVerified: true
+✔ PASS [4175ms] : Running Send Queue/Steer Mode Contract (/api/session/prompt + Q shortcut)
+    - endpointGuards: ["400 missing params","400 invalid mode","ghost ok:false","stream 400 invalid mode","queue/remove 400 & ghost","fork 400 & ghost"]
+    - pureLogic: ["default queue","label 排队/插队","persisted steer"]
+    - staticWiring: ["Q shortcut","Z shortcut revoke","F shortcut fork","sendRunningPrompt","revokeQueuedPrompt","doForkSession","status row","prompt endpoint","fork endpoint","queued grey bubble / steer dark-orange bubble"]
+✔ PASS [  77ms] : Message File Preview Contract (image/txt/md fullscreen preview)
+    - attachmentChannels: ["objects/<sha2>/<sha> image/png 往返","files/<sha2>/<sha>/<name> text/plain 往返","file-objects 回退"]
+    - guards: ["400 bad id","404 unknown id","415 non-whitelisted","403 outside workspace","403 unregistered cwd","415 workspace non-whitelisted"]
+    - staticWiring: ["fp-chip/openFilePreview/closeFilePreview","local echo","markdown image+link chips","modal keyboard guard","ES5 redline scan"]
+    - probeWorkspace: <HOME>/pony-agent
+✔ PASS [   4ms] : Message File Preview render logic (pure ES5 chip rules)
+    - mdChipRules: ["local md/txt -> chip","uppercase ext","spaced/bracketed path","percent-decoded path"]
+    - literalsKept: ["external url","non-whitelisted ext","code span"]
+    - attachmentChips: ["image thumb + content-addressed url","non-previewable -> static chip"]
+    - escaping: ["quote in name stays inside data-fpname"]
+✔ PASS [   7ms] : DSH Process Down / Crash Indicator Contract
+    - dshStatusEndpoint: true
+    - dshAliveInBootstrap: true
+    - errorWhaleSvgPresent: true
+    - clientWiringVerified: true
+✔ PASS [   3ms] : Tree Modals Container Click Delegation & Signature Contract
+    - sessTreeDelegation: true
+    - wsTreeDelegation: true
+    - sessTreeSignature: true
+------------------------------------------------------
+Total: 39 | Passed: 39 | Failed: 0
+Total Elapsed Time: 7149ms
+======================================================
+

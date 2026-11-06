@@ -33,6 +33,10 @@ Q20 小方屏上，消息流里的文件此前都是"死"的：
      注册根 realpath 集合带 60s 缓存，避免每次点击都付一次 `getWorkspaces()`
      全量会话扫描——实测冷 3s / 热 1ms，同步阻塞 SSE），
      `..`/符号链接越界一律 403。
+     > 2026-11-06 部分取代：越界读取不再**无条件** 403——请求携带合法 `session` 且宿主投影
+     > `permissions.currentValue === 'danger-full-access'`、`workingDirectory` 等于该 cwd 时放行；
+     > 扩展名白名单与体积上限不变。见
+     > `.agents/notes/implemented/bug-fix/2026-11-06-out-of-workspace-preview-session-policy.md`。
      URL 里的 `name`/`kind`/`mediaType` 全部**展示用**，不参与任何判定。
 3. **闸门只认磁盘事实，绝不认调用方声明**（安全评审 P0 修复，见下）：
    白名单与 `Content-Type` 一律由服务端推导——工作区文件取 realpath 结果的

@@ -1,0 +1,55 @@
+{
+  "verdict": "FAIL",
+  "audited_scopes": [
+    ".dev-team/contract-wave-2026-11-06.md",
+    "server.mjs",
+    "lib/preview-policy.mjs",
+    "static/index.html",
+    "tests/acceptance/suite-preview-policy.mjs",
+    "tests/acceptance/adversarial/preview-policy-attack.mjs"
+  ],
+  "findings": [
+    {
+      "file": "server.mjs",
+      "line": 6750,
+      "rule": "SECURITY",
+      "counterexample_cmd": "# 越界读取闸门仍由调用方决定：`session` 与 `cwd` 都是调用方输入，且 /api/sessions 无鉴权即可同时给出 sid 与其 cwd（c 步归属核验=用调用方给的 cwd 自证）。旧版同请求恒 403。\nSID_CWD=$(curl -s 'http://127.0.0.1:3090/api/sessions?cwd=<HOME>/dsh-q20-web' | node -e 'let s=\"\";process.stdin.on(\"data\",d=>s+=d).on(\"end\",()=>{const r=JSON.parse(s)[0];console.log(r.id+\" \"+r.cwd)})'); S=${SID_CWD% *}; C=${SID_CWD#* }; echo \"sid=$S cwd=$C\"; curl -s -o /dev/null -w 'outside=%{http_code} bytes=%{size_download}\\n' \"http://127.0.0.1:3090/api/file?cwd=$C&path=<HOME>/.dsh/storages/workspace.json&session=$S\"; curl -s -o /dev/null -w 'legacy=%{http_code}\\n' \"http://127.0.0.1:3090/api/file?cwd=$C&path=<HOME>/.dsh/storages/workspace.json\"\n# 实测: outside=200 bytes=302616 / legacy=403 → 任意未鉴权 LAN 调用方只要猜中一个已注册工作区路径即可读全机任意白名单扩展名文件（.yml/.yaml/.json 均在白名单 server.mjs:4002，如 ~/.dsh/.credentials.yaml）；ADR 以「任意调用方可自封完全权限」否决客户端上报 permission，但 sid 同为调用方输入、同样可枚举，该否决理由未真正落地；契约 §4 Non-Goals 未声明「LAN 调用方可信」这一信任边界。",
+      "severity": "BLOCKING"
+    },
+    {
+      "file": "server.mjs",
+      "line": 4269,
+      "rule": "LEAK",
+      "counterexample_cmd": "# 未注册 cwd 的 404 先于 registered 判定：无鉴权存在性探针（旧版该分支恒 403 'workspace is not registered'），违反「逐字节等价」只覆盖 registered+越界的隐含假设。\ncurl -s -o /dev/null -w 'nonexistent=%{http_code}\\n' 'http://127.0.0.1:3090/api/file?cwd=/tmp&path=/tmp/q20-nope-abc.md'; curl -s -o /dev/null -w 'existing=%{http_code}\\n' 'http://127.0.0.1:3090/api/file?cwd=/tmp&path=<HOME>/.dsh/AGENTS.md'\n# 实测: 404 / 403 → 可用状态码区分任意绝对路径是否存在；A6b 只断言「两者之一」的响应体，未覆盖 404 分支。",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "server.mjs",
+      "line": 5132,
+      "rule": "CONCURRENCY",
+      "counterexample_cmd": "# 授权判决直接复用 15s 正/负缓存：DSH 里把 preset 从 danger-full-access 降为 workspace-write 后 ≤15s 内越界读仍 200（撤权滞后），反向授予则 ≤15s 内误 403。\nsed -n '5132p;5140,5160p' server.mjs; sed -n '241p' .dev-team/contract-wave-2026-11-06.md\n# 契约 §3bis AT-3 显式接受「15s TTL 内沿用旧投影」，故降级 ADVISORY；但 ADR Consequences 未记录该撤权窗口，且无任何用例覆盖 preset 切换后的缓存失效时点。",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "server.mjs",
+      "line": 4309,
+      "rule": "CORRECTNESS",
+      "counterexample_cmd": "# 归属核验的静默降级：workingDirectory realpath 失败（缺失/已删/含 '~'）→ catch 置空串 → c 步被跳过，仅凭 permission 放行，且不落任何 [PREVIEW] 日志（warn 仅在 !policy.available 分支）。\nsed -n '4305,4315p' server.mjs; grep -n '\\[PREVIEW\\]' server.mjs\n# 结论：只有「宿主整个不可用」可审计；「宿主可用但 cwd 不可核验」这一更隐蔽的 fail-open 无收据。",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "lib/preview-policy.mjs",
+      "line": 28,
+      "rule": "NFR_VIOLATION",
+      "counterexample_cmd": "# 过度设计核对：快路径判据存在两份（调用方 server.mjs:6753 与纯函数步 a line 28），任一侧漂移即静默改变是否发起宿主 RPC；且 requestCwd 在服务端恒为 realpath 非空 → 真值表 T11/T12（requestCwd 缺失）在生产路径不可达。\nsed -n '6753p' server.mjs; sed -n '28p' lib/preview-policy.mjs; sed -n '146,151p' tests/acceptance/suite-preview-policy.mjs\n# 结论：单一 ~20 行闭包（含 a 步判据一次）可实现同行为；当前形态的收益仅是 A1–A5 的表驱动测试，建议至少把 a 步判据收敛为唯一真源。",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "tests/acceptance/suite-preview-policy.mjs",
+      "line": 275,
+      "rule": "CORRECTNESS",
+      "counterexample_cmd": "# 测试可信度：所有集成/对抗用例都直接构造 '&session='，无一条断言客户端真的把 data-fpsid 拼进 URL（static/index.html:9554/9926 → 9719-9730）；客户端漏接则整套仍全绿而功能不可达。\ngrep -rn 'fpsid\\|data-fpsid' tests/ || echo NO-TEST-COVERS-CLIENT-SESSION-WIRING\n# 实测输出 NO-TEST-COVERS-CLIENT-SESSION-WIRING；红相本身真红（artifacts/red-preview-policy*.log 为 NotImplemented 断言失败 + A8/A9 状态码失败，非 import/语法失败），断言未读实现内部常量（A4 仅核对契约字面量）。",
+      "severity": "ADVISORY"
+    }
+  ]
+}

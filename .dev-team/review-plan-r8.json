@@ -1,0 +1,40 @@
+{
+  "verdict": "PASS",
+  "audited_scopes": [
+    ".dev-team/contract-wave-2026-11-06.md",
+    ".agents/notes/implemented/bug-fix/2026-11-06-out-of-workspace-preview-session-policy.md",
+    "server.mjs",
+    "lib/preview-policy.mjs",
+    "static/index.html"
+  ],
+  "findings": [
+    {
+      "file": "server.mjs",
+      "line": 5124,
+      "rule": "SECURITY",
+      "counterexample_cmd": "grep -n \"deliverables/presented\" -A 12 server.mjs; grep -n \"name === 'present'\" -A 16 server.mjs  # 清单由 present/deliverables.presented/write/edit 的模型可控 path 构成 → 完全权限会话可把任意已读路径自授权进清单（例：read ~/.config/gh/hosts.yml 后 present 之 → G4 命中 → 200 原始 token；该 basename 不在 R-4 denylist 内）。缓解：R-4 覆盖 .credentials*/.ssh/.aws/.gnupg/密钥扩展名；且该会话本身已能读并输出同内容，权限主体未提升 → 可接受，按 ADVISORY 记账（建议在 ADR 已知残留里显式登记）",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "server.mjs",
+      "line": 6961,
+      "rule": "SECURITY",
+      "counterexample_cmd": "curl -s 'http://127.0.0.1:3090/api/file?cwd=/tmp&path=/etc/hostname&session=session-mw47e45cavblex'; curl -s 'http://127.0.0.1:3090/api/file?cwd=/tmp&path=/etc/q20-nope.txt&session=session-mw47e45cavblex'  # 均 403，但 code 分别为 PREVIEW_SESSION_MISMATCH（目标存在）与 PREVIEW_OUT_OF_SCOPE（target realpath 失败）→ R-9 在状态码层堵住的存在性 oracle 经 body code 复活，可无鉴权探测任意绝对路径是否存在",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": ".agents/notes/implemented/bug-fix/2026-11-06-out-of-workspace-preview-session-policy.md",
+      "line": 105,
+      "rule": "CONTRACT_BREAK",
+      "counterexample_cmd": "curl -s -o /dev/null -w '%{http_code}\\n' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=<HOME>/.dsh/AGENTS.md&session=session-mw47e45cavblex'  # ADR 结论仍记 '200 / 1490B'，实测 403 PREVIEW_NOT_IN_DELIVERABLES；第 91 行还把「只允许清单内越界」列为已否决备选，而 Decision 10 已采纳 → same-commit 文档漂移/验收收据失真",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": ".dev-team/contract-wave-2026-11-06.md",
+      "line": 259,
+      "rule": "CONTRACT_BREAK",
+      "counterexample_cmd": "grep -n 'A14a\\|A14b\\|A14c' tests/acceptance/suite-preview-policy.mjs; sed -n '33,34p' tests/acceptance/run-all.mjs  # §3 仍写 R-8「当前无覆盖」，实际 A14a/b/c 已冻结并登记进 run-all；§1.4 接缝表亦缺 Q20_MOCK_HOST_SESSION_DELIVERABLES 行",
+      "severity": "ADVISORY"
+    }
+  ]
+}
