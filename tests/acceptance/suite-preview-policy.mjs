@@ -40,8 +40,12 @@ const projEnv = (obj) => ({ Q20_MOCK_HOST_PROJECTIONS: JSON.stringify(obj) });
 const FULL = FULL_ACCESS_POLICY;
 const WRITE = 'workspace-write';
 
-/** A6 向后兼容铁律的基线响应体（契约 §1.3 铁律 / R-2 / R-6：逐字节等价，不含 code）。 */
+/** A6 向后兼容铁律的基线响应体（契约 §1.3 铁律 / R-2：逐字节等价，不含 code）。 */
 const LEGACY_ESCAPE_BODY = '{"ok":false,"error":"path escapes the workspace root"}';
+/** 旧未注册文案：契约 R-3 明确 Test A6b 以「接受集合」断言（实施侧无需保留旧文案）。 */
+const LEGACY_UNREGISTERED_BODY = '{"ok":false,"error":"workspace is not registered"}';
+/** R-8 成员闸门新增错误码（error 原文待 amend 冻结，见 RED-PHASE §10.7）。 */
+const NOT_IN_DELIVERABLES = 'PREVIEW_NOT_IN_DELIVERABLES';
 
 const writeFile = (dir, name, content) => {
   const p = path.join(dir, name);
@@ -236,8 +240,8 @@ async function main() {
     }
   });
 
-  // ── A6b 未注册工作区（R-6：未注册 cwd 一律走 b 步越界文案，不得保留 workspace is not registered）──
-  await runner.run('A6b 未注册工作区（无 session）：403 且响应体为 b 步越界文案（不含 code）', async () => {
+  // ── A6b 未注册工作区（契约 R-3：接受集合 {'path escapes…','workspace is not registered'}）──
+  await runner.run('A6b 未注册工作区（无 session）：403 且响应体为契约 R-3 接受集合之一（不含 code）', async () => {
     const { srv } = await openHost('a6b');
     try {
       const outsideDir = tempDir('q20-prev-out-a6b-');
@@ -245,11 +249,13 @@ async function main() {
       const unregistered = tempDir('q20-prev-unreg-a6b-');
       const res = await rawRequest(srv.base, fileUrl(unregistered, outsideFile));
       assertEqual(res.status, 403, 'A6b 未注册 cwd → status');
-      // R-6（裁决）：未注册 cwd 的拒绝统一为 b 步越界文案，与「无 session 越界」逐字节等价。
-      assertEqual(res.text, LEGACY_ESCAPE_BODY,
-        'A6b 未注册 cwd → 响应体必须是 b 步越界文案（不得保留 workspace is not registered / 不得含 code）');
+      // 契约 R-3 明文：A6b 以接受集合断言（实施侧无需保留旧文案）；存在性 oracle 由 A12/A15 单独收口。
+      assertOk(res.text === LEGACY_ESCAPE_BODY || res.text === LEGACY_UNREGISTERED_BODY,
+        'A6b 未注册工作区响应体必须为契约 R-3 接受集合之一（且不得含 code）',
+        LEGACY_ESCAPE_BODY + ' 或 ' + LEGACY_UNREGISTERED_BODY, res.text);
+      assertEqual(res.json && res.json.code, undefined, 'A6b 无 session 的拒绝体不得含 code（R-2）');
       assertNoLeak(res, [unregistered, outsideDir], 'A6b 未注册 403');
-      return '未注册 cwd → 403 ' + LEGACY_ESCAPE_BODY;
+      return '未注册 cwd → 403（' + (res.text === LEGACY_ESCAPE_BODY ? 'b 步文案' : '旧文案') + '）';
     } finally {
       await srv.stop();
     }
@@ -583,8 +589,161 @@ async function main() {
     }
   });
 
+  // ═══════════ A14 交付物成员闸门（契约 amend R-8；mock 接缝 Q20_MOCK_HOST_SESSION_DELIVERABLES）═══════════
+  // 接缝约定（测试侧先行定义，mock 实现待补，见 RED-PHASE §10.4）：
+  //   Q20_MOCK_HOST_SESSION_DELIVERABLES = { "<sid>": ["<abs path>" | "<relative to sessionCwd>", ... ] }
+  // 语义（R-8）：越界（非快路径）读取**只有命中本会话交付物清单**才放行；清单项允许相对 sessionCwd。
+  const deliverEnv = (sid, list) => JSON.stringify({ [sid]: list });
+  const CODES_NOT_IN_DELIVERABLES = NOT_IN_DELIVERABLES;
+
+  await runner.run('A14a 越界文件在交付物清单内（完全权限 + 同 cwd）→ 200 且内容一致', async () => {
+    const sid = 'session-a14a-full';
+    const marker = 'A14A-IN-LIST-BYTES\n';
+    const outsideDir = tempDir('q20-a14-out-');
+    const listed = writeFile(outsideDir, 'a14a-listed.md', marker);
+    const { srv, cwd } = await openHost('a14a', ({ workspacePath }) => ({
+      ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a14a') } }),
+      Q20_MOCK_HOST_SESSION_DELIVERABLES: deliverEnv(sid, [listed]),
+    }));
+    try {
+      const res = await rawRequest(srv.base, fileUrlSession(cwd, listed, sid));
+      assertEqual(res.status, 200, 'A14a 清单内越界文件 → status');
+      assertEqual(res.text, marker, 'A14a 清单内越界文件内容必须逐字节一致');
+      assertEqual(res.headers['content-type'], 'text/plain; charset=utf-8', 'A14a → Content-Type');
+      return 'in-list=200 (' + res.text.length + 'B)';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  await runner.run('A14b 同参数但文件不在清单内（同扩展名 .md）→ 403 PREVIEW_NOT_IN_DELIVERABLES 且无字节出网', async () => {
+    const sid = 'session-a14b-full';
+    const listMarker = 'A14B-LISTED-BYTES\n';
+    const unlistedMarker = 'A14B-UNLISTED-SECRET-BYTES\n';
+    const outsideDir = tempDir('q20-a14b-out-');
+    const listed = writeFile(outsideDir, 'a14b-listed.md', listMarker);
+    const unlisted = writeFile(outsideDir, 'a14b-unlisted.md', unlistedMarker);
+    const { srv, cwd } = await openHost('a14b', ({ workspacePath }) => ({
+      ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a14b') } }),
+      Q20_MOCK_HOST_SESSION_DELIVERABLES: deliverEnv(sid, [listed]),
+    }));
+    try {
+      const res = await rawRequest(srv.base, fileUrlSession(cwd, unlisted, sid));
+      assertEqual(res.status, 403, 'A14b 清单外同扩展名文件 → status（不得因完全权限放行）');
+      assertEqual(res.json && res.json.code, CODES_NOT_IN_DELIVERABLES, 'A14b → code');
+      assertOk(res.json && typeof res.json.error === 'string' && res.json.error.length > 0,
+        'A14b → error 必须是非空原文（文案待 amend 冻结）', '非空字符串', res.json && res.json.error);
+      assertOk(res.json && res.json.error.indexOf(outsideDir) === -1 && res.json.error.indexOf('/') === -1,
+        'A14b error 不得夹带绝对路径', '不含路径', redact(res.json && res.json.error));
+      assertEqual(res.headers['content-type'], 'application/json; charset=utf-8', 'A14b 必须是 JSON 拒绝，不是文件流');
+      assertNoLeak(res, [unlistedMarker, outsideDir], 'A14b');
+      return 'unlisted=403 ' + CODES_NOT_IN_DELIVERABLES;
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  await runner.run('A14c 清单项为相对路径（相对 sessionCwd）→ 归一后命中 → 200（证明归一语义）', async () => {
+    const sid = 'session-a14c-full';
+    const marker = 'A14C-RELATIVE-LIST-BYTES\n';
+    const outsideDir = tempDir('q20-a14c-out-');
+    const target = writeFile(outsideDir, 'a14c-rel.md', marker);
+    const { srv, cwd } = await openHost('a14c', ({ workspacePath }) => {
+      // 相对路径必须相对 sessionCwd（= 请求 cwd）计算，故这里需要预测 cwd —— 与 openHost 的断言同源。
+      const predictedCwd = workspacePath('ws-a14c');
+      const rel = path.relative(predictedCwd, target);
+      return {
+        ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: predictedCwd } }),
+        Q20_MOCK_HOST_SESSION_DELIVERABLES: deliverEnv(sid, [rel]),
+      };
+    });
+    try {
+      assertOk(path.isAbsolute(target) && !path.isAbsolute(path.relative(cwd, target)),
+        'A14c 前置：清单项必须真的是相对路径', '相对路径', path.relative(cwd, target));
+      const res = await rawRequest(srv.base, fileUrlSession(cwd, target, sid));
+      assertEqual(res.status, 200, 'A14c 相对路径清单项归一命中 → status');
+      assertEqual(res.text, marker, 'A14c 归一命中后内容必须逐字节一致');
+      return 'relative(' + path.relative(cwd, target) + ')=200';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  await runner.run('A14d 工作区内文件即使不在清单内 → 仍 200（快路径不受成员闸门影响）', async () => {
+    const sid = 'session-a14d-full';
+    const outsideDir = tempDir('q20-a14d-out-');
+    const listed = writeFile(outsideDir, 'a14d-listed.md', 'A14D-OTHER\n');
+    const { srv, cwd } = await openHost('a14d', ({ workspacePath }) => ({
+      ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a14d') } }),
+      Q20_MOCK_HOST_SESSION_DELIVERABLES: deliverEnv(sid, [listed]),
+    }));
+    try {
+      const insideContent = 'A14D-INSIDE-NOT-LISTED\n';
+      const insideFile = writeFile(cwd, 'a14d-inside.md', insideContent);
+      const res = await rawRequest(srv.base, fileUrl(cwd, insideFile));
+      assertEqual(res.status, 200, 'A14d 工作区内未列入清单的文件 → status（快路径不变）');
+      assertEqual(res.text, insideContent, 'A14d 内容逐字节一致');
+      const resWithSid = await rawRequest(srv.base, fileUrlSession(cwd, insideFile, sid));
+      assertEqual(resWithSid.status, 200, 'A14d 带 session 的工作区内文件 → status（快路径仍零宿主调用）');
+      return 'in-workspace not-listed=200（有/无 session 均 200）';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  await runner.run('A14e 无合法 session + 越界命中清单 → 403 旧文案（不含 code，R-2 一致）', async () => {
+    const sid = 'session-a14e-full';
+    const marker = 'A14E-LISTED-BYTES\n';
+    const outsideDir = tempDir('q20-a14e-out-');
+    const listed = writeFile(outsideDir, 'a14e-listed.md', marker);
+    const { srv, cwd } = await openHost('a14e', ({ workspacePath }) => ({
+      ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a14e') } }),
+      Q20_MOCK_HOST_SESSION_DELIVERABLES: deliverEnv(sid, [listed]),
+    }));
+    try {
+      const res = await rawRequest(srv.base, fileUrl(cwd, listed));
+      assertEqual(res.status, 403, 'A14e 无 session 越界（即便在清单内）→ status');
+      assertEqual(res.text, LEGACY_ESCAPE_BODY,
+        'A14e 无合法 session 的拒绝体必须与今天逐字节等价（b 步优先，不含 code）');
+      assertNoLeak(res, [marker, outsideDir], 'A14e');
+      return 'no-session=403 逐字节等价（清单不改变无 session 语义）';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  // ═══════════ A15 存在性 oracle 收口（契约 amend R-9：合法 session + 未注册 cwd）═══════════
+  await runner.run('A15 合法 session + 未注册 cwd + 目标不存在 → 403（不得 404）；已注册 + 不存在 → 404 不变', async () => {
+    const sid = 'session-a15-full';
+    const unregistered = os.tmpdir();
+    const { srv, cwd } = await openHost('a15', projEnv({
+      // 会话 cwd = 未注册目录本身（c 步可通过），因此 403 只能来自「未注册 + 目标不存在」的收口规则
+      [sid]: { permissions: { currentValue: FULL }, workingDirectory: unregistered },
+    }));
+    try {
+      const nope = path.join(unregistered, 'q20-nope-a15-' + process.pid + '-' + Date.now() + '.md');
+      assertFalse(fs.existsSync(nope), 'A15 前置：探测目标必须不存在');
+      const probe = await rawRequest(srv.base, fileUrlSession(unregistered, nope, sid));
+      assertEqual(probe.status, 403,
+        'A15 合法 session + 未注册 cwd + 目标不存在 → 必须 403（不得用 404 暴露绝对路径存在性）');
+      assertOk(probe.json && (probe.json.code === CODES_NOT_IN_DELIVERABLES
+        || probe.json.code === 'PREVIEW_OUT_OF_SCOPE'),
+      'A15 → code（R-8 成员闸门或 b 步语义，二者皆 fail-closed）',
+      CODES_NOT_IN_DELIVERABLES + ' 或 PREVIEW_OUT_OF_SCOPE', probe.json && probe.json.code);
+      assertNoLeak(probe, [unregistered], 'A15 未注册 + 不存在');
+
+      const registeredMissing = await rawRequest(srv.base, fileUrlSession(cwd, path.join(cwd, 'a15-missing.md'), sid));
+      assertEqual(registeredMissing.status, 404, 'A15 已注册 cwd + 目标不存在 → status 必须仍是 404');
+      assertEqual(registeredMissing.json && registeredMissing.json.error, 'preview file not found',
+        'A15 已注册 cwd + 目标不存在 → error 原文不变');
+      return '未注册+不存在(合法 session)=403 ' + (probe.json && probe.json.code) + '; 已注册+不存在=404';
+    } finally {
+      await srv.stop();
+    }
+  });
+
   // ═══════════ A13 客户端接线静态断言（Gate-1 ADVISORY ⑤，防「客户端漏接仍全绿」）═══════════
-  await runner.run('A13 客户端接线静态断言：data-fpsid ×2 + &session= 拼接 + 403 code→文案映射（含 PREVIEW_SENSITIVE_PATH）', async () => {
+  await runner.run('A13 客户端接线静态断言：data-fpsid ×2 + &session= 拼接 + 403 code→文案映射（含 SENSITIVE / NOT_IN_DELIVERABLES）', async () => {
     const file = path.join(REPO_ROOT, 'static', 'index.html');
     assertOk(fs.existsSync(file), 'A13 static/index.html 必须存在', redact(file), '(missing)');
     const html = fs.readFileSync(file, 'utf8');
@@ -602,6 +761,7 @@ async function main() {
       'PREVIEW_SESSION_MISMATCH',
       'PREVIEW_POLICY_UNAVAILABLE',
       'PREVIEW_SENSITIVE_PATH',
+      'PREVIEW_NOT_IN_DELIVERABLES',
     ];
     const missing = codeKeys.filter((k) => html.indexOf(k) === -1);
     assertEqual(missing.length, 0,

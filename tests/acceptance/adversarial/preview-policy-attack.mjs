@@ -12,6 +12,8 @@
  *   AT-3 竞态（danger-full-access vs workspace-write 同实例 barrier 并发 20 轮）→ 无策略串味
  *   AT-4 mock 定时器卫生（契约 amend M-2）：DELAY 触发超时后，子进程真实退出码/退出墙钟受限，
  *        且超时窗口之后无未处理 rejection / 未捕获异常（禁止 sleep 竞态，全部按事件计时）
+ *   AT-5 交付物清单缓存安全边界（契约 amend R-8）：清单缺失/为空 fail-closed；同进程缓存不得串味；
+ *        20 轮 barrier 并发（清单内/清单外各半）结果稳定
  *
  * 纪律：每用例独立 mock 实例（临时 DSH_HOME + 临时工作区根）；跨用例不复用实例，
  *       以规避 session/projections 的 15s 正/负缓存串味（契约 §3bis 对抗前提）。
@@ -25,7 +27,8 @@ import {
   assertEqual, assertFalse, assertLt, assertOk, cleanupTempDirs, createRunner, fail, redact, tempDir,
 } from '../lib/harness.mjs';
 import {
-  countRpcMethod, createWorkspaceViaApi, launchPreviewHostWithIpc, openPreviewWorkspace, rawRequest, waitForLog,
+  countRpcMethod, createWorkspaceViaApi, launchPreviewHost, launchPreviewHostWithIpc, openPreviewWorkspace,
+  rawRequest, waitForLog,
 } from '../lib/preview-host.mjs';
 
 const runner = createRunner('PREVIEW-AT');
@@ -44,6 +47,7 @@ const CODES = {
   permission: 'PREVIEW_PERMISSION_REQUIRED',
   unavailable: 'PREVIEW_POLICY_UNAVAILABLE',
   sensitive: 'PREVIEW_SENSITIVE_PATH',
+  notInDeliverables: 'PREVIEW_NOT_IN_DELIVERABLES',
 };
 const LEGACY_ESCAPE_BODY = '{"ok":false,"error":"path escapes the workspace root"}';
 
@@ -427,6 +431,145 @@ async function main() {
     } finally {
       if (!exited) await srv.stop();
       else srv.cleanupHome();
+    }
+  });
+
+  // ═══════════════════ AT-5 交付物清单缓存安全边界（契约 amend R-8）═══════════════════
+  await runner.run('AT-5a 交付物清单缺失 / 为空 → 越界一律 403 fail-closed（不得因无清单默认放行）', async () => {
+    const marker = 'AT5A-SECRET-BYTES\n';
+    const observed = [];
+    // ① 接缝完全缺失
+    {
+      const sid = 'session-at5a-none';
+      const outsideDir = tempDir('q20-at5a-out-');
+      const target = writeFile(outsideDir, 'at5a-none.md', marker);
+      const srv = await launchPreviewHost({
+        env: ({ workspacePath }) => projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-at5a-none') } }),
+      });
+      try {
+        const cwd = await createWorkspaceViaApi(srv, 'ws-at5a-none');
+        const res = await rawRequest(srv.base, fileUrlSession(cwd, target, sid));
+        assertEqual(res.status, 403, 'AT-5a 接缝缺失（无交付物清单）→ status');
+        assertOk(res.json && (res.json.code === CODES.notInDeliverables || res.json.code === CODES.unavailable),
+          'AT-5a 接缝缺失 → code（成员闸门或策略不可用，二者皆 fail-closed）',
+          CODES.notInDeliverables + ' 或 ' + CODES.unavailable, res.json && res.json.code);
+        assertNoLeak(res, [marker, outsideDir], 'AT-5a 接缝缺失');
+        observed.push('missing=403 ' + (res.json && res.json.code));
+      } finally {
+        await srv.stop();
+      }
+    }
+    // ② 清单显式为空数组
+    {
+      const sid = 'session-at5a-empty';
+      const outsideDir = tempDir('q20-at5a-empty-');
+      const target = writeFile(outsideDir, 'at5a-empty.md', marker);
+      const srv = await launchPreviewHost({
+        env: ({ workspacePath }) => ({
+          ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-at5a-empty') } }),
+          Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sid]: [] }),
+        }),
+      });
+      try {
+        const cwd = await createWorkspaceViaApi(srv, 'ws-at5a-empty');
+        const res = await rawRequest(srv.base, fileUrlSession(cwd, target, sid));
+        assertEqual(res.status, 403, 'AT-5a 空清单 → status');
+        assertOk(res.json && (res.json.code === CODES.notInDeliverables || res.json.code === CODES.unavailable),
+          'AT-5a 空清单 → code', CODES.notInDeliverables + ' 或 ' + CODES.unavailable, res.json && res.json.code);
+        assertNoLeak(res, [marker, outsideDir], 'AT-5a 空清单');
+        observed.push('empty=403 ' + (res.json && res.json.code));
+      } finally {
+        await srv.stop();
+      }
+    }
+    return observed.join('; ');
+  });
+
+  await runner.run('AT-5b 同进程缓存不得串味：先清单内 200 → 清单外高危 .config/gh/hosts.yml → 403 → 再清单内 200', async () => {
+    const sid = 'session-at5b-full';
+    const inMarker = 'AT5B-LISTED-BYTES\n';
+    const highRiskMarker = 'AT5B-GH-HOSTS-CREDENTIAL-MARKER\n';
+    const outsideDir = tempDir('q20-at5b-out-');
+    const listed = writeFile(outsideDir, 'at5b-listed.md', inMarker);
+    const highRiskDir = path.join(outsideDir, '.config', 'gh');
+    fs.mkdirSync(highRiskDir, { recursive: true });
+    const highRisk = writeFile(highRiskDir, 'hosts.yml', highRiskMarker);
+    const srv = await launchPreviewHost({
+      env: ({ workspacePath }) => ({
+        ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-at5b') } }),
+        Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sid]: [listed] }),
+      }),
+    });
+    try {
+      const cwd = await createWorkspaceViaApi(srv, 'ws-at5b');
+      const first = await rawRequest(srv.base, fileUrlSession(cwd, listed, sid));
+      assertEqual(first.status, 200, 'AT-5b 第一次（清单内）→ status');
+      assertEqual(first.text, inMarker, 'AT-5b 清单内内容逐字节一致');
+
+      const risky = await rawRequest(srv.base, fileUrlSession(cwd, highRisk, sid));
+      assertEqual(risky.status, 403,
+        'AT-5b 清单外高危文件（缓存已暖）→ status（不得因缓存串味放行）');
+      assertOk(risky.json && (risky.json.code === CODES.notInDeliverables || risky.json.code === CODES.sensitive),
+        'AT-5b 高危清单外 → code', CODES.notInDeliverables + ' 或 ' + CODES.sensitive,
+        risky.json && risky.json.code);
+      assertNoLeak(risky, [highRiskMarker, outsideDir], 'AT-5b 高危文件');
+
+      const again = await rawRequest(srv.base, fileUrlSession(cwd, listed, sid));
+      assertEqual(again.status, 200, 'AT-5b 第三次（清单内，缓存已暖）→ status 必须仍 200');
+      assertEqual(again.text, inMarker, 'AT-5b 第三次内容逐字节一致');
+      return 'listed=200 → highRisk=403 ' + (risky.json && risky.json.code) + ' → listed=200';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  await runner.run('AT-5c 20 轮 barrier 并发（清单内 2 / 清单外 2）→ 结果稳定、无策略串味', async () => {
+    const sid = 'session-at5c-full';
+    const inMarker = 'AT5C-LISTED-BYTES\n';
+    const outMarker = 'AT5C-UNLISTED-BYTES\n';
+    const outsideDir = tempDir('q20-at5c-out-');
+    const listedA = writeFile(outsideDir, 'at5c-listed-a.md', inMarker);
+    const listedB = writeFile(outsideDir, 'at5c-listed-b.md', inMarker);
+    const unlistedA = writeFile(outsideDir, 'at5c-unlisted-a.md', outMarker);
+    const unlistedB = writeFile(outsideDir, 'at5c-unlisted-b.md', outMarker);
+    const srv = await launchPreviewHost({
+      env: ({ workspacePath }) => ({
+        ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-at5c') } }),
+        Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sid]: [listedA, listedB] }),
+      }),
+    });
+    try {
+      const cwd = await createWorkspaceViaApi(srv, 'ws-at5c');
+      const ins = [listedA, listedB].map((f) => fileUrlSession(cwd, f, sid));
+      const outs = [unlistedA, unlistedB].map((f) => fileUrlSession(cwd, f, sid));
+      const mismatches = [];
+      for (let round = 1; round <= 20; round += 1) {
+        // 确定性 barrier：同一 tick 内同时发出 4 条请求（清单内 2 / 清单外 2）
+        const results = await Promise.all(ins.concat(outs).map((u) => rawRequest(srv.base, u)));
+        for (let i = 0; i < ins.length; i += 1) {
+          if (results[i].status !== 200 || results[i].text !== inMarker) {
+            mismatches.push('round ' + round + ' 清单内#' + (i + 1) + ' 期望 200，实际 '
+              + results[i].status + ' ' + JSON.stringify(results[i].text.slice(0, 100)));
+          }
+        }
+        for (let i = 0; i < outs.length; i += 1) {
+          const r = results[ins.length + i];
+          if (r.status !== 403) {
+            mismatches.push('round ' + round + ' 清单外#' + (i + 1) + ' 期望 403（不得串味放行），实际 '
+              + r.status + ' ' + JSON.stringify(r.text.slice(0, 100)));
+          } else if (r.text.indexOf(outMarker.trim()) !== -1) {
+            mismatches.push('round ' + round + ' 清单外#' + (i + 1) + ' 响应夹带目标文件字节');
+          }
+        }
+      }
+      if (mismatches.length > 0) {
+        fail('AT-5c 20 轮 barrier 并发内成员闸门结果不稳定/串味',
+          '每轮清单内 200 + 清单外 403', mismatches.slice(0, 6).join(' | ')
+            + (mismatches.length > 6 ? ' | …共 ' + mismatches.length + ' 处' : ''));
+      }
+      return '20 轮 × 4 并发：清单内恒 200（内容一致）/ 清单外恒 403（无字节）';
+    } finally {
+      await srv.stop();
     }
   });
 

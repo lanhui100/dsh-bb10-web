@@ -546,3 +546,104 @@ node tests/acceptance/adversarial/preview-policy-attack.mjs    # → exit 1（9 
 3. A10c 必须保持绿：工作区内 `.credentials.yaml` = 200、`.q20_token` = 415（denylist 仅非快路径；呼应 `test-unit.mjs:2994-3008`）。
 4. AT-4 绿相要求 mock 延迟计时器在超时分支 `clearTimeout` 或 `unref`，且 SIGTERM 后真实退出 ≤2000ms、总墙钟 ≤4000ms、无未处理 rejection。
 5. 实施者不得修改本波测试文件（以 §9.8 sha256 为准）；若断言与 amend 文本冲突，停下来由 Lead 裁决。
+
+---
+
+# 红相 #3（Wave 2026-11-06 第 4 轮）— 契约 amend R-8 / R-9：越界读取必须命中本会话交付物清单
+
+- Owner: **test-agent**（独立验收方）；触发源：Lead 裁决 2026-11-06（复审 FAIL 后方案由「敏感名单 denylist 为主闸门」改为「越界读取必须命中本会话交付物清单」）
+- 待落文裁决：**R-8** 交付物成员闸门 → 403 `PREVIEW_NOT_IN_DELIVERABLES`；**R-9** 存在性 oracle 收口（合法 session + `!registered` + 目标不存在 → 403，不得 404）
+- 落盘时间: **2026-11-06T09:0x+08:00**（本机 `node v22.21.0`，仓库根 `<repo>`）
+- 物理日志: [red-preview-policy-r8.log](tests/acceptance/artifacts/red-preview-policy-r8.log) · [red-preview-policy-at-r8.log](tests/acceptance/artifacts/red-preview-policy-at-r8.log)
+
+## 10.1 复现命令（只跑本波两套件；**不跑全量 run-all**）
+
+```bash
+cd <repo>
+node tests/acceptance/suite-preview-policy.mjs                 # → exit 1（27 条）
+node tests/acceptance/adversarial/preview-policy-attack.mjs    # → exit 1（12 条）
+```
+
+## 10.2 新增/扩展用例（6 条新增 + A13 扩展）
+
+| 套件 | 用例 | 契约条目 | 红相结果 |
+|:--|:--|:--|:--|
+| suite-preview-policy | A14a 越界文件**在清单内**（完全权限 + 同 cwd）→ 200 且内容一致 | R-8 | ✔ PASS（护栏：当前实现「全放行」，故该正向路径天然为绿；实施后必须保持绿） |
+| suite-preview-policy | A14b **不在清单内**（同扩展名 `.md`）→ 403 `PREVIEW_NOT_IN_DELIVERABLES` + 无字节出网 | R-8 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A14c 清单项为**相对路径**（相对 sessionCwd）→ 归一后命中 200 | R-8 | ✔ PASS（护栏，同上） |
+| suite-preview-policy | A14d 工作区内文件（不在清单内）→ 200（快路径不受成员闸门影响） | R-8 | ✔ PASS（护栏） |
+| suite-preview-policy | A14e 无合法 session + 越界命中清单 → 403 旧文案（不含 code） | R-8 / R-2 | ✔ PASS（护栏） |
+| suite-preview-policy | A15 合法 session + 未注册 cwd + 目标不存在 → 403（不得 404）；已注册 + 不存在 → 404 不变 | R-9 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A13（扩展）code→文案映射键增加 `PREVIEW_NOT_IN_DELIVERABLES` | Gate-1 ADVISORY ⑤ + R-8 | ✖ FAIL（断言失败） |
+| adversarial | AT-5a 交付物清单**缺失 / 显式为空** → 越界一律 403（fail-closed） | R-8 | ✖ FAIL（断言失败） |
+| adversarial | AT-5b 同进程缓存不得串味：清单内 200 → 清单外高危 `.config/gh/hosts.yml` → 403 → 清单内再次 200 | R-8 | ✖ FAIL（断言失败） |
+| adversarial | AT-5c 20 轮 barrier 并发（清单内 2 / 清单外 2）→ 结果稳定、无串味 | R-8 | ✖ FAIL（断言失败） |
+
+红相汇总：`suite-preview-policy` `total=27 pass=24 fail=3 degraded=0`（**exit 1**）·
+`preview-policy-attack` `total=12 pass=9 fail=3 degraded=0`（**exit 1**）。
+
+## 10.3 逐条红相证据（期望 vs 实际，原样摘自日志）
+
+| 用例 | 失败断言 | 期望 | 实际（物理事实） |
+|:--|:--|:--|:--|
+| A14b | 清单外同扩展名 `.md`（完全权限 + 同 cwd）→ status | `403` | `200`（当前实现无成员校验：完全权限即放行任意越界白名单类型） |
+| A15 | 合法 session + 未注册 cwd + 目标不存在 → status | `403` | `404`（realpath 先于 registered 判定 → 存在性 oracle 在「有合法 session」时仍可探测） |
+| A13 | 403 `code`→文案映射覆盖（含 `PREVIEW_NOT_IN_DELIVERABLES`） | 缺失数 `0` | `1`（`static/index.html` 无该映射键） |
+| AT-5a | 清单缺失（无 `Q20_MOCK_HOST_SESSION_DELIVERABLES`）→ 越界 status | `403` | `200`（无清单被当成「不限制」而非「无授权」） |
+| AT-5b | 清单外高危 `.config/gh/hosts.yml`（缓存已暖）→ status | `403` | `200`（清单外文件被放行；R-4 判据不含该路径形态，成员闸门尚不存在） |
+| AT-5c | 20 轮 barrier 并发：清单外每条 → status | 每轮 `403` | `200`（`AT5C-UNLISTED-BYTES` 字节直接出网，逐轮复现） |
+
+## 10.4 mock 接缝约定（**接缝待实现**，测试侧先行冻结）
+
+```jsonc
+// Q20_MOCK_HOST_SESSION_DELIVERABLES（mock-only，与 PROJECTIONS 同层；生产路径绝不读取）
+{ "<sessionId>": ["<abs path>" | "<relative to sessionCwd>", ... ] }
+```
+
+- 生效面：`session/projections` 返回的 `values` 需携带该会话的交付物清单（键名由实现侧定，测试只注入 env）。
+- 语义（R-8）：越界（非快路径）读取**只有目标 realpath 命中清单**才放行；清单项可为**相对 sessionCwd** 的路径，实现侧须 `resolve(sessionCwd, entry)` 归一后再比较（A14c 覆盖）。
+- 接缝缺失 / 清单为空：一律按「无授权」fail-closed（AT-5a 覆盖），**不得**解释为「不限制」。
+- 缓存边界：清单与 `session/projections` 同缓存域时，必须按 sid 隔离（AT-5b/5c 覆盖）；跨 sid 与跨清单不得串味。
+
+## 10.5 本轮已转绿的部分（实施已落地，非缺陷）
+
+- **R-4 denylist**（A10a 六类凭据文件全 403；A10c 区内快路径 `.credentials.yaml`=200 / `.q20_token`=415 不变）。
+- **R-5 归属不可核验**（A11 `~/ws-x` → 403 `PREVIEW_POLICY_UNAVAILABLE` + `[PREVIEW]` warn）。
+- **R-6 未注册语义**（A12 无 session：未注册+不存在=403 越界文案；已注册+不存在=404）。
+- **M-2 定时器卫生**（AT-4：`Timeout before/after = 0/0`，SIGTERM 后 6ms 退出，无未处理 rejection）。
+- **A6b 回退说明**：上轮曾把 A6b 收紧为「逐字节 = b 步文案」，本轮按契约 §1.3 **R-3 明文**（“Test A6b 以接受集合断言，实施侧无需保留旧文案”）回退为接受集合 `{path escapes…, workspace is not registered}`；这是**对齐冻结契约**，不是为转绿放宽 —— 存在性 oracle 由 A12/A15 单独收口，比集合断言更严格。
+
+## 10.6 防假红 / 防污染核查
+
+1. `node --check` 两套件通过；均正常输出 `SUITE-* SUMMARY`（非 exit 2，无 `MODULE_NOT_FOUND`/`SYNTAX`）。
+2. 6 条失败全部是**断言级**行为失败（`200 vs 403` / `404 vs 403` / 缺失映射键），无导入失败、无执行异常逃逸、无 500。
+3. 隔离：每用例独立 mock 实例（临时 `DSH_HOME` + 临时工作区根），`stop()` 回收；AT-5c 每轮 4 条并发由**同一 tick 的 `Promise.all`** 构成 barrier，无 sleep 竞态。
+4. 输出脱敏：`grep -cE '/hom[e]/[a-zA-Z0-9_.-]+/' tests/acceptance/artifacts/red-preview-policy*-r8.log` → `0 0`。
+5. **他人冻结产物零触碰**：未跑 `run-all`；`git status --porcelain tests/acceptance/artifacts/*.png | wc -l` = `0`。
+6. 未改动实现与契约：`server.mjs` / `static/index.html` / `lib/preview-policy.mjs` / `.dev-team/contract-wave-2026-11-06.md` 均只读。
+
+## 10.7 待冻结口径（不自行改契约，待 amend 落文/Lead 裁决）
+
+1. **`PREVIEW_NOT_IN_DELIVERABLES` 的 `error` 原文**：amend 尚未给出字面量。当前 A14b 断言「非空字符串 + 不含任何 `/` 与绝对路径」（不锁字面量）；amend 冻结后**应收紧为逐字相等**（一行改动）。
+2. **A15 的 `code`**：未注册 cwd + 目标不存在 + 合法 session，允许 `PREVIEW_NOT_IN_DELIVERABLES` 或 `PREVIEW_OUT_OF_SCOPE`（二者皆 fail-closed）；amend 若指定唯一码，请回调收紧。
+3. **清单项归一基准**：A14c 按「相对 sessionCwd」实现断言（Lead 裁决原文）；若 amend 改为「相对 requestCwd」，二者在当前用例中等价（c 步已要求 sessionCwd === requestCwd），无需改测试。
+4. **R-4 与 R-8 的顺序**：A10a 期望越界敏感文件 → `PREVIEW_SENSITIVE_PATH`（denylist 先于成员闸门或独立命中即可）；AT-5b 同时接受 `NOT_IN_DELIVERABLES`/`SENSITIVE`。若 amend 明确「成员闸门优先于 denylist」，A10a 的 6 条断言需回调为成员闸门码 —— 请 Lead 一并裁决。
+
+## 10.8 冻结清单（sha256，Lead 复核后置只读）
+
+| 文件 | sha256 |
+|:--|:--|
+| `tests/acceptance/suite-preview-policy.mjs`（A1–A15，27 条） | `90416508905b92fbd1e032561471337b403911910f9212280770a6f51f95a306` |
+| `tests/acceptance/adversarial/preview-policy-attack.mjs`（AT-1…AT-5，12 条） | `2d50b096a1dcd056ce41eb6fc1afa78b8ed49321d9ba53b206000ba58963ca30` |
+| `tests/acceptance/lib/preview-host.mjs`（含 IPC 探针，本轮未改） | `3e191703daa59b9888e724536f50810d8c36d961b1d4c6927e81b50759493c67` |
+| `tests/acceptance/run-all.mjs`（自红相 #1 起已登记，本轮未改） | `1fbab93f051a66535688b13dcfb84d71d4b9dbfbc84e58327927f924332782dd` |
+| `tests/acceptance/artifacts/red-preview-policy-r8.log` | `EXIT=1`（27/24/3） |
+| `tests/acceptance/artifacts/red-preview-policy-at-r8.log` | `EXIT=1`（12/9/3） |
+
+## 10.9 本波绿相判据（第 4 轮）
+
+1. `node tests/acceptance/suite-preview-policy.mjs` → **exit 0**（`total=27 pass=27`）。
+2. `node tests/acceptance/adversarial/preview-policy-attack.mjs` → **exit 0**（`total=12 pass=12`）。
+3. 成员闸门绿相要求：清单内/相对清单项 200；清单外 403 `PREVIEW_NOT_IN_DELIVERABLES`；清单缺失或为空一律 403；工作区内快路径不受影响（`.q20_token`=415 仍由 `test-unit.mjs` 兜底）；同一进程缓存不得让清单外文件借缓存 200。
+4. R-9 绿相要求：合法 session + 未注册 cwd + 目标不存在 → 403（不得 404）；已注册 + 不存在 → 404 不变。
+5. 实施者不得修改本波测试文件（以 §10.8 sha256 为准）；若断言与 amend 文本冲突，停下由 Lead 裁决。
