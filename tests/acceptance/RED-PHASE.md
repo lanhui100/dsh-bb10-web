@@ -700,3 +700,60 @@ node tests/acceptance/adversarial/preview-policy-attack.mjs    # → exit 1（12
 | `tests/acceptance/adversarial/preview-policy-attack.mjs`（AT-1…AT-5，12 条，含 AT-3 迁移） | `ad618af3d40de7d5dea2df2daaafb1a0538e1c1632065f73af3d05513e68164d` |
 | `tests/acceptance/lib/preview-host.mjs`（本轮未改） | `3e191703daa59b9888e724536f50810d8c36d961b1d4c6927e81b50759493c67` |
 | `tests/acceptance/run-all.mjs`（本轮未改） | `1fbab93f051a66535688b13dcfb84d71d4b9dbfbc84e58327927f924332782dd` |
+
+---
+
+# §12 红相 #4（R-8 相对清单项归一口径偏离）— A14f
+
+- Owner: **test-agent**（独立验收方）；触发源：L3-B 终审复审报出的**契约偏离**（Lead 2026-11-06 裁决，最后一轮红相）
+- 契约口径：R-8 要求「清单项中的**相对路径按会话 cwd（`workingDirectory`）归一**」。当投影**没有**会话 cwd 时，
+  实现**不得**退化为拿**请求 cwd**（`?cwd=`，调用方可控）当归一本基 —— 否则攻击者只要让清单里存在相对条目，
+  就能自选 `cwd` 把清单外的任意文件「算成成员」。**正确行为：fail-closed。**
+- 落盘时间: **2026-11-06T09:1x+08:00**（本机 `node v22.21.0`，仓库根 `<repo>`）
+- 物理日志: [red-preview-policy-r9.log](tests/acceptance/artifacts/red-preview-policy-r9.log)
+
+## 12.1 新增用例（1 条：A14f，双场景同一用例内）
+
+| 场景 | 输入 | 期望 |
+|:--|:--|:--|
+| ①（红相） | 接缝 `Q20_MOCK_HOST_SESSION_DELIVERABLES={"session-a14f":["./a14f-relative.md"]}`；投影 `{permissions:{currentValue:'danger-full-access'}}`（**无** `workingDirectory`）；请求 `cwd=<临时目录 dirA>`（真实存在但**未注册** → 非快路径）、`path=<dirA>/a14f-relative.md`（真实存在）、`session=session-a14f` | **403**（`PREVIEW_NOT_IN_DELIVERABLES` 或 `PREVIEW_POLICY_UNAVAILABLE`），响应体**不含文件字节** |
+| ②（对照） | 同一接缝同上，但投影**补** `workingDirectory=<dirA 绝对路径>` | **200** 且内容逐字节一致（证明**只有**「无会话 cwd」才拒绝） |
+
+执行顺序：两场景各自独立 mock 实例（接缝 env 只能在 spawn 前注入），**先取回两条响应再断言**，
+使红相日志同时留下「无 cwd 也 200」与「有 cwd 应 200」两个事实（避免第一处断言即中断、丢失对照证据）。
+
+## 12.2 红相证据（期望 vs 实际）
+
+```
+断言失败: A14f 无会话 cwd + 相对清单项 → 必须 fail-closed（403 不得放行；有 cwd 对照=200）
+       → 期望: 403；实际: 200
+```
+
+- `suite-preview-policy` `total=28 pass=27 fail=1 degraded=0` → **EXIT=1**（唯一红点即 A14f 场景①）。
+- 对照场景② 在同一轮内实测 **200**（见失败文案「有 cwd 对照=200」），证明偏离点**精确落在**「无会话 cwd 时拿请求 cwd 当归一本基」。
+- 该 200 意味着：清单项 `./a14f-relative.md` 被归一到**调用方自选的 cwd** 并命中，清单外文件因此被当成成员 → 与 R-8 fail-closed 口径冲突。
+
+## 12.3 防假红 / 纪律核查
+
+1. `node --check` 通过；套件正常输出 `SUITE-PREVIEW-POLICY SUMMARY`（非 exit 2，无 `MODULE_NOT_FOUND`/`SYNTAX`）。
+2. 红点是**断言级**行为失败（`200 vs 403`），无异常逃逸、无 500、无导入失败。
+3. **其余用例零改动**：本轮 diff 仅新增 A14f（`suite-preview-policy.mjs`）+ 本节文档；A1–A15 既有用例与 AT-1…AT-5 一字未改。
+4. 回归确认：`preview-policy-attack.mjs` 仍 `total=12 pass=12 fail=0`（未登记新用例、无回归）。
+5. 不跑全量 `run-all`；`git status --porcelain tests/acceptance/artifacts/*.png | wc -l` = `0`（他人冻结 PNG 零触碰）。
+6. 输出脱敏：`grep -cE '/hom[e]/[a-zA-Z0-9_.-]+/' tests/acceptance/artifacts/red-preview-policy-r9.log` → `0`。
+
+## 12.4 冻结清单更新（sha256）
+
+| 文件 | sha256 |
+|:--|:--|
+| `tests/acceptance/suite-preview-policy.mjs`（A1–A15 + A14f，28 条） | `f360fcb1095f04464841ab60bc0cd662337dabceb919e28bec2eaac37070688f` |
+| `tests/acceptance/adversarial/preview-policy-attack.mjs`（AT-1…AT-5，12 条，本轮未改） | `ad618af3d40de7d5dea2df2daaafb1a0538e1c1632065f73af3d05513e68164d` |
+| `tests/acceptance/lib/preview-host.mjs`（本轮未改） | `3e191703daa59b9888e724536f50810d8c36d961b1d4c6927e81b50759493c67` |
+| `tests/acceptance/artifacts/red-preview-policy-r9.log` | `EXIT=1`（28/27/1） |
+
+## 12.5 绿相判据（本轮）
+
+1. `node tests/acceptance/suite-preview-policy.mjs` → **exit 0**（`total=28 pass=28`）。
+2. A14f 绿相 = 场景① 403（`PREVIEW_NOT_IN_DELIVERABLES` 或 `PREVIEW_POLICY_UNAVAILABLE`，且响应体不含文件字节）+ 场景② 200（内容一致）。
+3. 修复方向（供实现侧参考，不属本 Agent 写域）：相对清单项只在 `sessionCwd` 非空时用 `resolve(sessionCwd, entry)` 归一；
+   `sessionCwd` 为空时**不得**回退到 `requestCwd` —— 该会话视为「无法核验成员身份」→ fail-closed。

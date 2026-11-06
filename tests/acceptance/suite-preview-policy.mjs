@@ -717,6 +717,64 @@ async function main() {
     }
   });
 
+  // ═══════════ A14f 相对清单项必须按「会话 cwd」归一（无会话 cwd → fail-closed）═══════════
+  // 攻击面（L3-B 契约偏离）：清单项是相对路径、投影又没有 workingDirectory 时，
+  // 若实现退化为拿**请求 cwd**（调用方可控）当归一本基，攻击者就能把清单外文件「算成成员」。
+  // 契约口径：没有会话 cwd 就无法核验相对清单项 → 一律 fail-closed。
+  await runner.run('A14f 相对清单项 + 无会话 cwd → 403 fail-closed（不得拿调用方给的请求 cwd 归一；对照组有 cwd 时 200）', async () => {
+    const sid = 'session-a14f';
+    const marker = 'A14F-REL-ENTRY-SECRET-BYTES\n';
+    const relEntry = './a14f-relative.md';
+    const dirA = tempDir('q20-a14f-cwd-');      // 请求 cwd（真实存在但**未注册** → 走非快路径）
+    const fileA = writeFile(dirA, 'a14f-relative.md', marker);
+
+    // 两条场景都先取回响应再断言（保证红相日志同时记录「无 cwd 也 200」与「有 cwd 应 200」两个事实）。
+    let noCwdRes = null;
+    let withCwdRes = null;
+
+    // 场景①（红）：投影不含 workingDirectory（会话 cwd 不可知）
+    {
+      const srv = await launchPreviewHost({
+        env: {
+          ...projEnv({ [sid]: { permissions: { currentValue: FULL } } }),
+          Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sid]: [relEntry] }),
+        },
+      });
+      try {
+        noCwdRes = await rawRequest(srv.base, fileUrlSession(dirA, fileA, sid));
+      } finally {
+        await srv.stop();
+      }
+    }
+
+    // 场景②（对照）：投影给出 workingDirectory = 同一 cwd → 相对清单项可归一 → 200
+    {
+      const srv = await launchPreviewHost({
+        env: {
+          ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: dirA } }),
+          Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sid]: [relEntry] }),
+        },
+      });
+      try {
+        withCwdRes = await rawRequest(srv.base, fileUrlSession(dirA, fileA, sid));
+      } finally {
+        await srv.stop();
+      }
+    }
+
+    assertEqual(noCwdRes.status, 403,
+      'A14f 无会话 cwd + 相对清单项 → 必须 fail-closed（403 不得放行；有 cwd 对照=' + withCwdRes.status + '）');
+    assertOk(noCwdRes.json && (noCwdRes.json.code === CODES_NOT_IN_DELIVERABLES
+      || noCwdRes.json.code === 'PREVIEW_POLICY_UNAVAILABLE'),
+    'A14f 无会话 cwd → code 必须为成员闸门拒绝或策略不可用',
+    CODES_NOT_IN_DELIVERABLES + ' 或 PREVIEW_POLICY_UNAVAILABLE', noCwdRes.json && noCwdRes.json.code);
+    assertNoLeak(noCwdRes, [marker, dirA], 'A14f 无会话 cwd');
+
+    assertEqual(withCwdRes.status, 200, 'A14f 对照（有会话 cwd + 同一相对清单项）→ status 必须 200');
+    assertEqual(withCwdRes.text, marker, 'A14f 对照内容必须逐字节一致（证明只有「无会话 cwd」才拒绝）');
+    return '无 cwd=403 ' + (noCwdRes.json && noCwdRes.json.code) + '; 有 cwd=200';
+  });
+
   // ═══════════ A15 存在性 oracle 收口（契约 amend R-9：合法 session + 未注册 cwd）═══════════
   await runner.run('A15 合法 session + 未注册 cwd + 目标不存在 → 403（不得 404）；已注册 + 不存在 → 404 不变', async () => {
     const sid = 'session-a15-full';
