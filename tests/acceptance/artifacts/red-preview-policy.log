@@ -1,0 +1,78 @@
+# 红相原始日志 — Wave 2026-11-06 preview-policy (L2-T)
+# 命令: node tests/acceptance/suite-preview-policy.mjs
+# 时间: 2026-11-06T08:11:48+08:00  节点: v22.21.0  仓库: <repo>
+# 契约: .dev-team/contract-wave-2026-11-06.md §3 A1–A9
+
+# Q20 验收套件 PREVIEW-POLICY (A1–A9) — 契约 .dev-team/contract-wave-2026-11-06.md
+# 时间: 2026-11-06T00:11:48.445Z
+# 红相：lib/preview-policy.mjs 为一行 throw 空桩时 A1–A5/A8/A9 必须真实断言失败；
+#       A6/A7 是既有行为的向后兼容护栏（实施前即绿，实施后必须保持绿）。
+▶ [PREVIEW-POLICY] A1 快路径 a：contained+registered → 200，快路径不看 session/permission
+  ✖ FAIL [0.21ms] A1 快路径 a：contained+registered → 200，快路径不看 session/permission
+      断言失败: A1 最小合法参 {contained:true,registered:true} 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d）
+  ✖ FAIL [0.06ms] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d）
+      断言失败: A2 {contained:false,registered:true} 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行
+  ✖ FAIL [0.08ms] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行
+      断言失败: A3 会话 cwd=/other ≠ 请求 cwd=/ws（即便完全权限也必须拒绝） 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED
+  ✖ FAIL [0.09ms] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED
+      断言失败: A4 permission="workspace-write" 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝
+  ✖ FAIL [0.1ms] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝
+      断言失败: A5 合法全通参 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致
+  ✔ PASS [337.71ms] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致 — out=403 54B 逐字节等价; in=200 16B 内容一致; RPC=0
+▶ [PREVIEW-POLICY] A6b 未注册工作区（无 session）：仍 403 且不泄漏路径
+  ✔ PASS [322.95ms] A6b 未注册工作区（无 session）：仍 403 且不泄漏路径 — 未注册 cwd 仍 403（既有文案）
+▶ [PREVIEW-POLICY] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次）
+  ✔ PASS [320.63ms] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次） — in=200 16B; session/projections RPC=0
+▶ [PREVIEW-POLICY] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致
+  ✖ FAIL [323.78ms] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致
+      断言失败: A8 完全权限 + 同 cwd + 越界白名单文件 → status → 期望: 200；实际: 403
+▶ [PREVIEW-POLICY] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+  ✖ FAIL [474.22ms] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+      断言失败: A9.1a → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-POLICY] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+  ✖ FAIL [325.25ms] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+      断言失败: A9.1b → code（缺 permissions 视为不可用，不得默认放行） → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-POLICY] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED
+  ✖ FAIL [323.76ms] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED
+      断言失败: A9.2 → code → 期望: PREVIEW_PERMISSION_REQUIRED；实际: undefined
+▶ [PREVIEW-POLICY] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH
+  ✖ FAIL [330.48ms] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH
+      断言失败: A9.3 → code → 期望: PREVIEW_SESSION_MISMATCH；实际: undefined
+▶ [PREVIEW-POLICY] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）
+  ✖ FAIL [333.58ms] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）
+      断言失败: A9.4 非白名单扩展名（.bin）在完全权限下 → status → 期望: 415；实际: 403
+
+──────── PREVIEW-POLICY 报告 ────────
+✖ FAIL [0.21ms] A1 快路径 a：contained+registered → 200，快路径不看 session/permission
+        A1 最小合法参 {contained:true,registered:true} 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✖ FAIL [0.06ms] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d）
+        A2 {contained:false,registered:true} 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✖ FAIL [0.08ms] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行
+        A3 会话 cwd=/other ≠ 请求 cwd=/ws（即便完全权限也必须拒绝） 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✖ FAIL [0.09ms] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED
+        A4 permission="workspace-write" 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✖ FAIL [0.1ms] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝
+        A5 合法全通参 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✔ PASS [337.71ms] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致
+✔ PASS [322.95ms] A6b 未注册工作区（无 session）：仍 403 且不泄漏路径
+✔ PASS [320.63ms] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次）
+✖ FAIL [323.78ms] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致
+        A8 完全权限 + 同 cwd + 越界白名单文件 → status → 期望: 200；实际: 403
+✖ FAIL [474.22ms] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+        A9.1a → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [325.25ms] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+        A9.1b → code（缺 permissions 视为不可用，不得默认放行） → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [323.76ms] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED
+        A9.2 → code → 期望: PREVIEW_PERMISSION_REQUIRED；实际: undefined
+✖ FAIL [330.48ms] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH
+        A9.3 → code → 期望: PREVIEW_SESSION_MISMATCH；实际: undefined
+✖ FAIL [333.58ms] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）
+        A9.4 非白名单扩展名（.bin）在完全权限下 → status → 期望: 415；实际: 403
+合计: 14 用例, PASS 3, FAIL 11, SKIP(degraded) 0
+SUITE-PREVIEW-POLICY SUMMARY: total=14 pass=3 fail=11 degraded=0
+EXIT=1

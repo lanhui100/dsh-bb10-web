@@ -336,6 +336,45 @@
     "browser": "720x720 console errors=0; suppression + other-session notify verified live"
    },
    "closed_at": "2026-10-19T23:30:00+08:00"
+  },
+  {
+   "wave": "2026-11-06",
+   "branch": "preview-policy",
+   "date": "2026-11-06",
+   "grade": "B",
+   "grade_triggers": [
+    "external-io: host RPC session/projections on /api/file out-of-scope path",
+    "security-boundary: filesystem containment gate",
+    "multi-file: server.mjs + static/index.html + lib/preview-policy.mjs + tests/acceptance"
+   ],
+   "base_commit": "90b27b2",
+   "tasks": [
+    "task-1 (protocol contract+stub, protocol-agent)",
+    "task-2 (red tests L2-T+L2-AT, test-agent)",
+    "task-3 (implementation, executor)"
+   ],
+   "contract": ".dev-team/contract-wave-2026-11-06.md",
+   "red_commit": null,
+   "green_commit": null,
+   "status": "in_progress",
+   "quarantine": null,
+   "nfr_degraded": [],
+   "write_scopes": {
+    "lib/preview-policy.mjs": "task-1 (stub) -> task-3 (impl, sequential)",
+    "server.mjs": "task-3",
+    "static/index.html": "task-3",
+    "tests/acceptance/": "task-2"
+   }
   }
- ]
+ ],
+ "classification": {
+  "2026-11-06": {
+   "grade": "B",
+   "triggers": [
+    "external-io: host RPC session/projections on /api/file out-of-scope path",
+    "security-boundary: filesystem containment gate",
+    "multi-file: server.mjs + static/index.html + lib/preview-policy.mjs + tests/acceptance"
+   ]
+  }
+ }
 }

@@ -1,0 +1,48 @@
+# 红相原始日志 — Wave 2026-11-06 preview-policy (L2-AT)
+# 命令: node tests/acceptance/adversarial/preview-policy-attack.mjs
+# 时间: 2026-11-06T08:11:51+08:00  节点: v22.21.0  仓库: <repo>
+# 契约: .dev-team/contract-wave-2026-11-06.md §3bis AT-1/AT-2/AT-3
+
+# Q20 对抗套件 PREVIEW-AT (AT-1/AT-2/AT-3) — 契约 .dev-team/contract-wave-2026-11-06.md §3bis
+# 时间: 2026-11-06T00:11:51.629Z
+▶ [PREVIEW-AT] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网
+  ✖ FAIL [502.06ms] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网
+      断言失败: AT-1a → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-AT] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms
+  ✖ FAIL [482.45ms] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms
+      断言失败: AT-1b → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-AT] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+  ✖ FAIL [326.6ms] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+      断言失败: AT-1c → code（不得因缺 permissions 默认放行） → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-AT] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行
+  ✖ FAIL [477.68ms] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行
+      断言失败: AT-2a workspace-write 越界拒绝码 → 期望: PREVIEW_PERMISSION_REQUIRED 或 PREVIEW_SESSION_MISMATCH；实际: undefined
+▶ [PREVIEW-AT] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径
+  ✔ PASS [485.18ms] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径 — NUL=404; long(4828B)=404; ../../etc/passwd=404
+▶ [PREVIEW-AT] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC
+  ✔ PASS [340.8ms] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC — 编码穿越=403/3ms; 超长 200 字符=403/2ms; 含路径分隔=403/2ms; 空串=403/2ms; RPC=0
+▶ [PREVIEW-AT] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403
+  ✖ FAIL [322.29ms] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403
+      断言失败: AT-2e 伪造 permission 必须被忽略 → 仍按宿主投影 workspace-write 拒绝 → 期望: PREVIEW_PERMISSION_REQUIRED；实际: undefined
+▶ [PREVIEW-AT] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味
+  ✖ FAIL [367.65ms] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味
+      断言失败: AT-3 20 轮 barrier 并发内策略结果不稳定/串味 → 期望: 每轮 full=200 且 write=403 PREVIEW_PERMISSION_REQUIRED；实际: round 1 sid-full 未按完全权限放行（期望 200 + 目标内容，实际 403 "{\"ok\":false,\"error\":\"path escapes the workspace root\"}"） | round 1 sid-write 策略码不符（期望 403 PREVIEW_PERMISSION_REQUIRED，实际 403 "{\"ok\":false,\"error\":\"path escapes the workspace root\"}"） | round 2 sid-full 未按完全权限放行（期望 200 + 目标内容，实际 403 "{\"ok\"…
+
+──────── PREVIEW-AT 报告 ────────
+✖ FAIL [502.06ms] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网
+        AT-1a → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [482.45ms] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms
+        AT-1b → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [326.6ms] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+        AT-1c → code（不得因缺 permissions 默认放行） → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [477.68ms] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行
+        AT-2a workspace-write 越界拒绝码 → 期望: PREVIEW_PERMISSION_REQUIRED 或 PREVIEW_SESSION_MISMATCH；实际: undefined
+✔ PASS [485.18ms] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径
+✔ PASS [340.8ms] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC
+✖ FAIL [322.29ms] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403
+        AT-2e 伪造 permission 必须被忽略 → 仍按宿主投影 workspace-write 拒绝 → 期望: PREVIEW_PERMISSION_REQUIRED；实际: undefined
+✖ FAIL [367.65ms] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味
+        AT-3 20 轮 barrier 并发内策略结果不稳定/串味 → 期望: 每轮 full=200 且 write=403 PREVIEW_PERMISSION_REQUIRED；实际: round 1 sid-full 未按完全权限放行（期望 200 + 目标内容，实际 403 "{\"ok\":false,\"error\":\"path escapes the workspace root\"}"） | round 1 sid-write 策略码不符（期望 403 PREVIEW_PERMISSION_REQUIRED，实际 403 "{\"ok\":false,\"error\":\"path escapes the workspace root\"}"） | round 2 sid-full 未按完全权限放行（期望 200 + 目标内容，实际 403 "{\"ok\"…
+合计: 8 用例, PASS 2, FAIL 6, SKIP(degraded) 0
+SUITE-PREVIEW-AT SUMMARY: total=8 pass=2 fail=6 degraded=0
+EXIT=1

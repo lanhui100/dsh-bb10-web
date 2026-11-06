@@ -1,0 +1,25 @@
+{
+ "wave": "2026-11-06",
+ "base_commit": "90b27b2",
+ "captured_at": "2026-11-06T00:03:16.975Z",
+ "suites": [
+  {
+   "suite": "test-decoupling.mjs",
+   "exit": 0,
+   "log": ".dev-team/receipts/baseline-decoupling.log"
+  },
+  {
+   "suite": "test-unit.mjs",
+   "exit": 0,
+   "log": ".dev-team/receipts/baseline-unit.log"
+  },
+  {
+   "suite": "test-preview-browser.mjs",
+   "exit": 0,
+   "passed": 29,
+   "failed": 0,
+   "log": ".dev-team/receipts/baseline-preview.log"
+  }
+ ],
+ "note": "存量回归基线（改动前）。test-suite.mjs 依赖真实宿主长链路，本波未纳入基线，改后按 test-unit+decoupling+preview-browser+新验收套件门禁。"
+}

@@ -1,0 +1,293 @@
+# 红相聚合日志 — Wave 2026-11-06 run-all
+# 命令: node tests/acceptance/run-all.mjs
+# 时间: 2026-11-06T08:09:50+08:00  节点: v22.21.0  仓库: <repo>
+
+
+════════════ 运行 suite-core.mjs ════════════
+# Q20 验收套件 CORE (A1–A7, A10) — 契约 .dev-team/contract-wave-2026-10-16.md
+# 时间: 2026-11-06T00:09:50.565Z
+▶ [CORE] A1 运行真源：RUNNING_SESSIONS 下 /api/sessions 报 isRunning=true/state=running
+  ✔ PASS [357.79ms] A1 运行真源：RUNNING_SESSIONS 下 /api/sessions 报 isRunning=true/state=running — time=6.29ms isRunning=true state=running
+▶ [CORE] A2 对抗注入 session/list 不可达（LIST_FAIL=1）：running 真源不得依赖 session/list 成功
+  ✔ PASS [503.53ms] A2 对抗注入 session/list 不可达（LIST_FAIL=1）：running 真源不得依赖 session/list 成功 — time=7.04ms isRunning=true state=running
+▶ [CORE] A3 对抗注入 session/list 慢链路（LIST_DELAY_MS=8000）：/api/sessions 单次 <1500ms 且仍报 running
+  ✔ PASS [491.53ms] A3 对抗注入 session/list 慢链路（LIST_DELAY_MS=8000）：/api/sessions 单次 <1500ms 且仍报 running — time=6.2ms isRunning=true state=running rpcLogSessionList=1
+▶ [CORE] A4 单一在飞 + 失败退避：LIST_FAIL=1 下连续 3 次 /api/sessions，共享主通道 session/list 调用 ≤1
+  ✔ PASS [1698.4ms] A4 单一在飞 + 失败退避：LIST_FAIL=1 下连续 3 次 /api/sessions，共享主通道 session/list 调用 ≤1 — 3 次 /api/sessions 耗时=[5,3,2]ms, session/list=0 次
+▶ [CORE] A5 子智能体真源：LIST_FAIL=1 下 /api/session/subagents?id=<parent> 仍含 SUBAGENTS 子会话
+  ✔ PASS [491.19ms] A5 子智能体真源：LIST_FAIL=1 下 /api/session/subagents?id=<parent> 仍含 SUBAGENTS 子会话 — subagents=1 time=5.43ms
+▶ [CORE] A6 插队闸门（C-7）：live 镜像判定 running 时 POST /api/session/prompt {mode:'steer'} 返回 ok:true
+  ✔ PASS [492.59ms] A6 插队闸门（C-7）：live 镜像判定 running 时 POST /api/session/prompt {mode:'steer'} 返回 ok:true — ok=true mode=steer time=5.82ms
+▶ [CORE] A7 轻量状态端点（C-8）：/api/sessions/status?ids=<sid> → isRunning=true 且 <300ms
+  ✔ PASS [511.05ms] A7 轻量状态端点（C-8）：/api/sessions/status?ids=<sid> → isRunning=true 且 <300ms — time=6.49ms isRunning=true state=running (含 C-8 边界 3 项)
+▶ [CORE] A10 ES5 门禁：static/index.html 内联脚本通过 acorn {ecmaVersion:5}
+  ✔ PASS [169.42ms] A10 ES5 门禁：static/index.html 内联脚本通过 acorn {ecmaVersion:5} — ES5 PASS (1 个内联 script, acorn 7.4.1)
+
+──────── CORE 报告 ────────
+✔ PASS [357.79ms] A1 运行真源：RUNNING_SESSIONS 下 /api/sessions 报 isRunning=true/state=running
+✔ PASS [503.53ms] A2 对抗注入 session/list 不可达（LIST_FAIL=1）：running 真源不得依赖 session/list 成功
+✔ PASS [491.53ms] A3 对抗注入 session/list 慢链路（LIST_DELAY_MS=8000）：/api/sessions 单次 <1500ms 且仍报 running
+✔ PASS [1698.4ms] A4 单一在飞 + 失败退避：LIST_FAIL=1 下连续 3 次 /api/sessions，共享主通道 session/list 调用 ≤1
+✔ PASS [491.19ms] A5 子智能体真源：LIST_FAIL=1 下 /api/session/subagents?id=<parent> 仍含 SUBAGENTS 子会话
+✔ PASS [492.59ms] A6 插队闸门（C-7）：live 镜像判定 running 时 POST /api/session/prompt {mode:'steer'} 返回 ok:true
+✔ PASS [511.05ms] A7 轻量状态端点（C-8）：/api/sessions/status?ids=<sid> → isRunning=true 且 <300ms
+✔ PASS [169.42ms] A10 ES5 门禁：static/index.html 内联脚本通过 acorn {ecmaVersion:5}
+合计: 8 用例, PASS 8, FAIL 0, SKIP(degraded) 0
+SUITE-CORE SUMMARY: total=8 pass=8 fail=0 degraded=0
+
+════════════ 运行 suite-host.mjs ════════════
+# Q20 验收套件 HOST (A8 真宿主一致性) — BASE=http://127.0.0.1:3090 (未提供 Q20_ACCEPT_RUNNING_SID，采样模式)
+# 时间: 2026-11-06T00:09:55.363Z
+▶ [HOST] A8 生产态：/api/sessions/status 与 /api/sessions 对真实 running 会话一致（且 <300ms）
+  (status 诊断: HTTP 200 raw={"ok":true,"at":1793923795989,"states":{"session-mw47e45cavblex":{"isRunning":true,"state":"running","known":true,"source":"live"},"session-ac1c0283-c423-4aab-a606-90249cea3506":{"isRunning":true,"state":"running","known":true,"source":"live"}}})
+  ✔ PASS [629.58ms] A8 生产态：/api/sessions/status 与 /api/sessions 对真实 running 会话一致（且 <300ms） — sampled=8 running=2 statusTime=1.85ms
+
+──────── HOST 报告 ────────
+✔ PASS [629.58ms] A8 生产态：/api/sessions/status 与 /api/sessions 对真实 running 会话一致（且 <300ms）
+合计: 1 用例, PASS 1, FAIL 0, SKIP(degraded) 0
+SUITE-HOST SUMMARY: total=1 pass=1 fail=0 degraded=0
+
+════════════ 运行 suite-browser.mjs ════════════
+# Q20 验收套件 BROWSER (A9 真实页面) — 时间: 2026-11-06T00:09:56.063Z
+▶ [BROWSER] A9-C C 面板：全工作区进行中显示 running 会话（终态不得残留）+ Console Error=0 + 截图
+  (chromium: playwright default)
+  ✔ PASS [1158.33ms] A9-C C 面板：全工作区进行中显示 running 会话（终态不得残留）+ Console Error=0 + 截图 — rows=1 runRows=1 consoleErrors=0 截图=a9-c-panel.png
+▶ [BROWSER] A9-U U 面板：存在子智能体时必须非空渲染 + Console Error=0 + 截图
+  ✔ PASS [732.93ms] A9-U U 面板：存在子智能体时必须非空渲染 + Console Error=0 + 截图 — nodes=1 consoleErrors=0 截图=a9-u-panel.png
+
+──────── BROWSER 报告 ────────
+✔ PASS [1158.33ms] A9-C C 面板：全工作区进行中显示 running 会话（终态不得残留）+ Console Error=0 + 截图
+✔ PASS [732.93ms] A9-U U 面板：存在子智能体时必须非空渲染 + Console Error=0 + 截图
+合计: 2 用例, PASS 2, FAIL 0, SKIP(degraded) 0
+SUITE-BROWSER SUMMARY: total=2 pass=2 fail=0 degraded=0
+
+════════════ 运行 suite-reasoning.mjs ════════════
+# Q20 验收套件 REASONING (A1–A8) — 契约 .dev-team/contract-wave-2026-10-18.md
+# 时间: 2026-11-06T00:09:58.051Z
+▶ [REASONING] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空
+  ✔ PASS [330.91ms] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空 — efforts=off/low/high defaultEffort=high current.reasoningEffort=high
+▶ [REASONING] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1
+  ✔ PASS [321.89ms] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1 — plain×2 receipts=1 → refresh=1 后=2
+▶ [REASONING] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort
+  ✔ PASS [331.09ms] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort — low.args.reasoningEffort=low provider=ponyllm model=glm-5.3-flash；无键回合 args 无该字段
+▶ [REASONING] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流
+  ✔ PASS [326.45ms] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流 — 123→400 文案含 reasoningEffort；65 字符→400；空串→200/done
+▶ [REASONING] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → ""
+  ✔ PASS [349.76ms] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → "" — 带 effort stats.reasoningEffort=low；无 effort stats.reasoningEffort=""
+▶ [REASONING] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5}
+  ✔ PASS [96.9ms] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5} — ES5 PASS (1 个内联 script, acorn 7.4.1)
+▶ [REASONING] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图
+  (chromium: playwright default)
+  ✔ PASS [1461.06ms] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图 — 档位含 Low/High 且 ● 命中 High；徽标含 "· Low"；consoleErrors=0；截图=a7-effort-panel.png,a7-effort-badge.png
+▶ [REASONING] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort
+  ✔ PASS [73.69ms] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort — openModel→bootstrap?refresh=1 命中；/api/chat/stream 发送函数（30052B）含 reasoningEffort
+▶ [REASONING] A9 真实浏览器：延迟 /api/session/stats 回包不得回滚用户档位 —— 转录 effort=low 时选 High，在途 stats 到达后徽标仍 "· High" 且发送载荷 reasoningEffort=high
+  ✔ PASS [4927.36ms] A9 真实浏览器：延迟 /api/session/stats 回包不得回滚用户档位 —— 转录 effort=low 时选 High，在途 stats 到达后徽标仍 "· High" 且发送载荷 reasoningEffort=high — 种子 stats=low；选 High 后徽标="glm-5.3-flash · High"；回包后观察终值="glm-5.3-flash · High"；面板 ● High 命中；发送载荷 reasoningEffort=high
+▶ [REASONING] A10 服务端 stats 不继承旧回合：turn1 带 effort=low、turn2 不带 → /api/session/stats.reasoningEffort 必须 ""
+  ✔ PASS [336.67ms] A10 服务端 stats 不继承旧回合：turn1 带 effort=low、turn2 不带 → /api/session/stats.reasoningEffort 必须 "" — turn1 stats=low → turn2（无键）stats=""
+▶ [REASONING] A11 真实浏览器：glm-5.3-flash 选 Low 后切 kimi-k3 → 生效档位取新模型 defaultEffort=high（面板 ● High）
+  ✔ PASS [905.4ms] A11 真实浏览器：glm-5.3-flash 选 Low 后切 kimi-k3 → 生效档位取新模型 defaultEffort=high（面板 ● High） — glm 选 Low 后徽标="glm-5.3-flash · Low"；切 kimi 后徽标="kimi-k3 · High"；面板档位 ● High 命中；kimi reasoning={"efforts":[{"id":"low","name":"Low"},{"id":"high","name":"High"}],"defaultEffort":"high"}
+▶ [REASONING] A12 目录刷新容错：Q20_MOCK_HOST_CATALOG_FAIL=1 接缝生效；FAIL_AFTER=1 时 ?refresh=1 仍返回上一份含 reasoning 的目录（不塌缩磁盘镜像）
+  ✔ PASS [637.92ms] A12 目录刷新容错：Q20_MOCK_HOST_CATALOG_FAIL=1 接缝生效；FAIL_AFTER=1 时 ?refresh=1 仍返回上一份含 reasoning 的目录（不塌缩磁盘镜像） — FAIL=1 接缝生效；FAIL_AFTER=1：暖缓存 3 档 → ?refresh=1 仍 3 档 + current.reasoningEffort=high
+
+──────── REASONING 报告 ────────
+✔ PASS [330.91ms] A1 /api/bootstrap 目录透传 reasoning：glm-5.3-flash 三档 efforts + defaultEffort=high；current.reasoningEffort 非空
+✔ PASS [321.89ms] A2 目录缓存：30s TTL 内连续两次普通 /api/bootstrap 的 modelCatalog 收据 ≤1；?refresh=1 必须 +1
+✔ PASS [331.09ms] A3 /api/chat/stream 发送透传：带 reasoningEffort=low → selectModel 收据 args.reasoningEffort=low 且 provider/model 正确；不带该键时收据无 reasoningEffort
+✔ PASS [326.45ms] A4 入参校验：reasoningEffort=123 → 400 且文案含 reasoningEffort；超长(>64) → 400；空串 → 照常 200 流
+✔ PASS [349.76ms] A5 会话 stats：带 reasoningEffort=low 的回合 → /api/session/stats 返回 reasoningEffort=low；无 effort 会话 → ""
+✔ PASS [96.9ms] A6 ES5 门禁（回归护栏）：static/index.html 全部内联 script 通过 acorn {ecmaVersion:5}
+✔ PASS [1461.06ms] A7 真实浏览器：点模型徽标 → 出现「思考强度」分组与档位；点 Low → 徽标含 "· Low" 且面板收起；Console Error=0 + 截图
+✔ PASS [73.69ms] A8 静态接线：openModel() 必须发 /api/bootstrap?refresh=1；/api/chat/stream 发送函数载荷必须含 reasoningEffort
+✔ PASS [4927.36ms] A9 真实浏览器：延迟 /api/session/stats 回包不得回滚用户档位 —— 转录 effort=low 时选 High，在途 stats 到达后徽标仍 "· High" 且发送载荷 reasoningEffort=high
+✔ PASS [336.67ms] A10 服务端 stats 不继承旧回合：turn1 带 effort=low、turn2 不带 → /api/session/stats.reasoningEffort 必须 ""
+✔ PASS [905.4ms] A11 真实浏览器：glm-5.3-flash 选 Low 后切 kimi-k3 → 生效档位取新模型 defaultEffort=high（面板 ● High）
+✔ PASS [637.92ms] A12 目录刷新容错：Q20_MOCK_HOST_CATALOG_FAIL=1 接缝生效；FAIL_AFTER=1 时 ?refresh=1 仍返回上一份含 reasoning 的目录（不塌缩磁盘镜像）
+合计: 12 用例, PASS 12, FAIL 0, SKIP(degraded) 0
+SUITE-REASONING SUMMARY: total=12 pass=12 fail=0 degraded=0
+
+════════════ 运行 suite-statusqueue-core.mjs ════════════
+# Q20 验收套件 STATUSQUEUE-CORE (A1–A4) — 契约 .dev-team/contract-wave-2026-10-19.md
+# 时间: 2026-11-06T00:10:08.262Z
+▶ [STATUSQUEUE-CORE] A1 纯函数：未结算 ask_user_question → true；同 callId 结算 → false；无提问 → false；JSON 字符串行亦支持
+  ✔ PASS [0.47ms] A1 纯函数：未结算 ask_user_question → true；同 callId 结算 → false；无提问 → false；JSON 字符串行亦支持 — 7 组纯函数断言
+▶ [STATUSQUEUE-CORE] A2 mock：含未结算 ask_user_question 的会话行 state=waiting && pendingInteraction=question && isRunning=true
+  ✔ PASS [353.66ms] A2 mock：含未结算 ask_user_question 的会话行 state=waiting && pendingInteraction=question && isRunning=true — time=4.8ms state=waiting pendingInteraction=question transcript=session.jsonl.zstd size=599
+▶ [STATUSQUEUE-CORE] A3 mock：同 callId tool/result 结算后不残留 waiting（running 时回到 state=running）
+  ✔ PASS [335.91ms] A3 mock：同 callId tool/result 结算后不残留 waiting（running 时回到 state=running） — before=waiting after=running pendingInteraction=undefined
+▶ [STATUSQUEUE-CORE] A4 mock：/api/sessions/status?ids= 对等待作答会话返回 state=waiting（与 A2 同口径）
+  ✔ PASS [333.94ms] A4 mock：/api/sessions/status?ids= 对等待作答会话返回 state=waiting（与 A2 同口径） — time=2.33ms state=waiting isRunning=true
+
+──────── STATUSQUEUE-CORE 报告 ────────
+✔ PASS [0.47ms] A1 纯函数：未结算 ask_user_question → true；同 callId 结算 → false；无提问 → false；JSON 字符串行亦支持
+✔ PASS [353.66ms] A2 mock：含未结算 ask_user_question 的会话行 state=waiting && pendingInteraction=question && isRunning=true
+✔ PASS [335.91ms] A3 mock：同 callId tool/result 结算后不残留 waiting（running 时回到 state=running）
+✔ PASS [333.94ms] A4 mock：/api/sessions/status?ids= 对等待作答会话返回 state=waiting（与 A2 同口径）
+合计: 4 用例, PASS 4, FAIL 0, SKIP(degraded) 0
+SUITE-STATUSQUEUE-CORE SUMMARY: total=4 pass=4 fail=0 degraded=0
+
+════════════ 运行 suite-statusqueue-browser.mjs ════════════
+# Q20 验收套件 STATUSQUEUE-BROWSER (A5/A6/A7 真实页面) — 时间: 2026-11-06T00:10:09.346Z
+▶ [STATUSQUEUE-BROWSER] A5 列表行 pendingInteraction=question 渲染 wait-dot（?）且无 run-dot + Console Error=0 + 截图
+  (chromium: playwright default)
+  ✔ PASS [1115.09ms] A5 列表行 pendingInteraction=question 渲染 wait-dot（?）且无 run-dot + Console Error=0 + 截图 — row=? wait 11/6 consoleErrors=0 截图=a5-pending-interaction.png
+▶ [STATUSQUEUE-BROWSER] A6 prompt-claimed 匹配清槽 + 不重复用户气泡 + 历史已含文本切回不复活 + Console Error=0
+  (A6 观测: {"僵尸槽登记":true,"claimed后停靠条":"none","claimed后槽存在":false,"claimed后气泡数":1,"切回后停靠条":"none","切回后气泡数":1})
+  ✔ PASS [5282.31ms] A6 prompt-claimed 匹配清槽 + 不重复用户气泡 + 历史已含文本切回不复活 + Console Error=0 — bubbles=1 consoleErrors=0 截图=a6-queue-claimed.png
+▶ [STATUSQUEUE-BROWSER] A7 空文本+畸形 JSON+跨会话 prompt-claimed：不抛异常、Console Error=0、当前槽不被误清
+  ✔ PASS [803.45ms] A7 空文本+畸形 JSON+跨会话 prompt-claimed：不抛异常、Console Error=0、当前槽不被误清 — consoleErrors=0 截图=a7-claimed-adversarial.png
+▶ [STATUSQUEUE-BROWSER] A8 陈旧 pendingInteraction 被 running 状态补丁清除（wait-dot → run-dot，不发散为停止键）+ Console Error=0 + 截图
+  (A8 观测: {"首屏waitDot":true,"补丁后runDot":false,"补丁后waitDot":true,"补丁后stopDot":false})
+  ✖ FAIL [9618.52ms] A8 陈旧 pendingInteraction 被 running 状态补丁清除（wait-dot → run-dot，不发散为停止键）+ Console Error=0 + 截图
+      断言失败: A8 陈旧 waiting 必须被 running 状态补丁清除（row 出现 .run-dot） → 期望: true；实际: false
+▶ [STATUSQUEUE-BROWSER] A9 历史旧轮次同文本不得误判已消费（宿主未认领时排队槽必须保留）+ Console Error=0 + 截图
+  (A9 观测: {"追发后停靠条":"block","切回后停靠条":"block","切回后槽存在":true,"历史气泡数":1})
+  ✔ PASS [5406.68ms] A9 历史旧轮次同文本不得误判已消费（宿主未认领时排队槽必须保留）+ Console Error=0 + 截图 — 槽保留=true 截图=a9-duplicate-prompt-slot.png
+▶ [STATUSQUEUE-BROWSER] A10 重放门控：replay_end 之前的 prompt-claimed 不得清槽，之后的实时帧才清槽 + Console Error=0 + 截图
+  (A10 观测: {"注入前停靠条":"block","replay_end前claimed后停靠条":"block","replay_end前claimed后槽存在":true,"实时claimed后停靠条":"none"})
+  ✔ PASS [1272.35ms] A10 重放门控：replay_end 之前的 prompt-claimed 不得清槽，之后的实时帧才清槽 + Console Error=0 + 截图 — gated=block live=none 截图=a10-replay-gate.png
+▶ [STATUSQUEUE-BROWSER] A11 流式在途跨 5s 兜底探测：回答节点不被清空/替换、delta 继续、气泡不重复、终态完整 + Console Error=0 + 截图
+  (A11 观测: {"流式在途":true,"探测次数":1,"期间新增帧":17,"在途节点存活":true,"被移除节点数":0,"容器最少子节点":5,"文本长度":{"观测前":104,"观测点":193,"最终":208},"在途气泡文本":{"观测前":55,"观测点":55},"用户气泡数":{"期间":1,"终态":1},"缺失片段数":0,"终态停靠条":"none"})
+  ✔ PASS [9228.79ms] A11 流式在途跨 5s 兜底探测：回答节点不被清空/替换、delta 继续、气泡不重复、终态完整 + Console Error=0 + 截图 — 在途节点存活=true 期间帧=17 缺失片段=0
+
+──────── STATUSQUEUE-BROWSER 报告 ────────
+✔ PASS [1115.09ms] A5 列表行 pendingInteraction=question 渲染 wait-dot（?）且无 run-dot + Console Error=0 + 截图
+✔ PASS [5282.31ms] A6 prompt-claimed 匹配清槽 + 不重复用户气泡 + 历史已含文本切回不复活 + Console Error=0
+✔ PASS [803.45ms] A7 空文本+畸形 JSON+跨会话 prompt-claimed：不抛异常、Console Error=0、当前槽不被误清
+✖ FAIL [9618.52ms] A8 陈旧 pendingInteraction 被 running 状态补丁清除（wait-dot → run-dot，不发散为停止键）+ Console Error=0 + 截图
+        A8 陈旧 waiting 必须被 running 状态补丁清除（row 出现 .run-dot） → 期望: true；实际: false
+✔ PASS [5406.68ms] A9 历史旧轮次同文本不得误判已消费（宿主未认领时排队槽必须保留）+ Console Error=0 + 截图
+✔ PASS [1272.35ms] A10 重放门控：replay_end 之前的 prompt-claimed 不得清槽，之后的实时帧才清槽 + Console Error=0 + 截图
+✔ PASS [9228.79ms] A11 流式在途跨 5s 兜底探测：回答节点不被清空/替换、delta 继续、气泡不重复、终态完整 + Console Error=0 + 截图
+合计: 7 用例, PASS 6, FAIL 1, SKIP(degraded) 0
+SUITE-STATUSQUEUE-BROWSER SUMMARY: total=7 pass=6 fail=1 degraded=0
+
+════════════ 运行 suite-preview-policy.mjs ════════════
+# Q20 验收套件 PREVIEW-POLICY (A1–A9) — 契约 .dev-team/contract-wave-2026-11-06.md
+# 时间: 2026-11-06T00:10:42.174Z
+# 红相：lib/preview-policy.mjs 为一行 throw 空桩时 A1–A5/A8/A9 必须真实断言失败；
+#       A6/A7 是既有行为的向后兼容护栏（实施前即绿，实施后必须保持绿）。
+▶ [PREVIEW-POLICY] A1 快路径 a：contained+registered → 200，快路径不看 session/permission
+  ✖ FAIL [0.24ms] A1 快路径 a：contained+registered → 200，快路径不看 session/permission
+      断言失败: A1 最小合法参 {contained:true,registered:true} 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d）
+  ✖ FAIL [0.06ms] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d）
+      断言失败: A2 {contained:false,registered:true} 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行
+  ✖ FAIL [0.08ms] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行
+      断言失败: A3 会话 cwd=/other ≠ 请求 cwd=/ws（即便完全权限也必须拒绝） 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED
+  ✖ FAIL [0.1ms] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED
+      断言失败: A4 permission="workspace-write" 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝
+  ✖ FAIL [0.1ms] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝
+      断言失败: A5 合法全通参 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+▶ [PREVIEW-POLICY] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致
+  ✔ PASS [338.41ms] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致 — out=403 54B 逐字节等价; in=200 16B 内容一致; RPC=0
+▶ [PREVIEW-POLICY] A6b 未注册工作区（无 session）：仍 403 且不泄漏路径
+  ✔ PASS [322.16ms] A6b 未注册工作区（无 session）：仍 403 且不泄漏路径 — 未注册 cwd 仍 403（既有文案）
+▶ [PREVIEW-POLICY] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次）
+  ✔ PASS [323.07ms] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次） — in=200 16B; session/projections RPC=0
+▶ [PREVIEW-POLICY] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致
+  ✖ FAIL [321.08ms] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致
+      断言失败: A8 完全权限 + 同 cwd + 越界白名单文件 → status → 期望: 200；实际: 403
+▶ [PREVIEW-POLICY] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+  ✖ FAIL [320.61ms] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+      断言失败: A9.1a → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-POLICY] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+  ✖ FAIL [318.36ms] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+      断言失败: A9.1b → code（缺 permissions 视为不可用，不得默认放行） → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-POLICY] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED
+  ✖ FAIL [320.73ms] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED
+      断言失败: A9.2 → code → 期望: PREVIEW_PERMISSION_REQUIRED；实际: undefined
+▶ [PREVIEW-POLICY] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH
+  ✖ FAIL [324.06ms] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH
+      断言失败: A9.3 → code → 期望: PREVIEW_SESSION_MISMATCH；实际: undefined
+▶ [PREVIEW-POLICY] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）
+  ✖ FAIL [323.82ms] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）
+      断言失败: A9.4 非白名单扩展名（.bin）在完全权限下 → status → 期望: 415；实际: 403
+
+──────── PREVIEW-POLICY 报告 ────────
+✖ FAIL [0.24ms] A1 快路径 a：contained+registered → 200，快路径不看 session/permission
+        A1 最小合法参 {contained:true,registered:true} 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✖ FAIL [0.06ms] A2 无 session 越界：403 PREVIEW_OUT_OF_SCOPE + 旧文案（b 步优先于 c/d）
+        A2 {contained:false,registered:true} 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✖ FAIL [0.08ms] A3 c 步会话不匹配：sessionCwd≠requestCwd → 403 PREVIEW_SESSION_MISMATCH；相等则放行
+        A3 会话 cwd=/other ≠ 请求 cwd=/ws（即便完全权限也必须拒绝） 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✖ FAIL [0.1ms] A4 d 步权限不足：workspace-write/read-only/空/缺失 → 403 PREVIEW_PERMISSION_REQUIRED
+        A4 permission="workspace-write" 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✖ FAIL [0.1ms] A5 e 步放行 + 畸形输入不 throw：恒返回四字段且落拒绝
+        A5 合法全通参 不得 throw（契约 §1.1：纯函数永不 throw，畸形/缺字段一律落拒绝分支） → 期望: 四字段对象；实际: threw: NotImplemented
+✔ PASS [338.41ms] A6 向后兼容：无 session 越界=403 逐字节等价（不含 code）；工作区内 200 内容一致
+✔ PASS [322.16ms] A6b 未注册工作区（无 session）：仍 403 且不泄漏路径
+✔ PASS [323.07ms] A7 快路径零宿主调用：PROJECTIONS_FAIL=1 下工作区内文件仍 200（RPC 收据 0 次）
+✖ FAIL [321.08ms] A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致
+        A8 完全权限 + 同 cwd + 越界白名单文件 → status → 期望: 200；实际: 403
+✖ FAIL [320.61ms] A9.1a 宿主投影失败（PROJECTIONS_FAIL=1，该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn
+        A9.1a → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [318.36ms] A9.1b 接缝缺该 sid（values 无 permissions）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+        A9.1b → code（缺 permissions 视为不可用，不得默认放行） → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [320.73ms] A9.2 workspace-write 越界 → 403 PREVIEW_PERMISSION_REQUIRED
+        A9.2 → code → 期望: PREVIEW_PERMISSION_REQUIRED；实际: undefined
+✖ FAIL [324.06ms] A9.3 session 指向别的工作区 cwd → 403 PREVIEW_SESSION_MISMATCH
+        A9.3 → code → 期望: PREVIEW_SESSION_MISMATCH；实际: undefined
+✖ FAIL [323.82ms] A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）
+        A9.4 非白名单扩展名（.bin）在完全权限下 → status → 期望: 415；实际: 403
+合计: 14 用例, PASS 3, FAIL 11, SKIP(degraded) 0
+SUITE-PREVIEW-POLICY SUMMARY: total=14 pass=3 fail=11 degraded=0
+
+════════════ 运行 adversarial/preview-policy-attack.mjs ════════════
+# Q20 对抗套件 PREVIEW-AT (AT-1/AT-2/AT-3) — 契约 .dev-team/contract-wave-2026-11-06.md §3bis
+# 时间: 2026-11-06T00:10:45.155Z
+▶ [PREVIEW-AT] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网
+  ✖ FAIL [345.12ms] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网
+      断言失败: AT-1a → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-AT] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms
+  ✖ FAIL [322.21ms] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms
+      断言失败: AT-1b → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-AT] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+  ✖ FAIL [321.89ms] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+      断言失败: AT-1c → code（不得因缺 permissions 默认放行） → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+▶ [PREVIEW-AT] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行
+  ✖ FAIL [321.69ms] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行
+      断言失败: AT-2a workspace-write 越界拒绝码 → 期望: PREVIEW_PERMISSION_REQUIRED 或 PREVIEW_SESSION_MISMATCH；实际: undefined
+▶ [PREVIEW-AT] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径
+  ✔ PASS [322.71ms] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径 — NUL=404; long(4828B)=404; ../../etc/passwd=404
+▶ [PREVIEW-AT] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC
+  ✔ PASS [326.14ms] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC — 编码穿越=403/2ms; 超长 200 字符=403/1ms; 含路径分隔=403/1ms; 空串=403/1ms; RPC=0
+▶ [PREVIEW-AT] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403
+  ✖ FAIL [319.08ms] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403
+      断言失败: AT-2e 伪造 permission 必须被忽略 → 仍按宿主投影 workspace-write 拒绝 → 期望: PREVIEW_PERMISSION_REQUIRED；实际: undefined
+▶ [PREVIEW-AT] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味
+  ✖ FAIL [349.27ms] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味
+      断言失败: AT-3 20 轮 barrier 并发内策略结果不稳定/串味 → 期望: 每轮 full=200 且 write=403 PREVIEW_PERMISSION_REQUIRED；实际: round 1 sid-full 未按完全权限放行（期望 200 + 目标内容，实际 403 "{\"ok\":false,\"error\":\"path escapes the workspace root\"}"） | round 1 sid-write 策略码不符（期望 403 PREVIEW_PERMISSION_REQUIRED，实际 403 "{\"ok\":false,\"error\":\"path escapes the workspace root\"}"） | round 2 sid-full 未按完全权限放行（期望 200 + 目标内容，实际 403 "{\"ok\"…
+
+──────── PREVIEW-AT 报告 ────────
+✖ FAIL [345.12ms] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网
+        AT-1a → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [322.21ms] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms
+        AT-1b → code → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [321.89ms] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+        AT-1c → code（不得因缺 permissions 默认放行） → 期望: PREVIEW_POLICY_UNAVAILABLE；实际: undefined
+✖ FAIL [321.69ms] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行
+        AT-2a workspace-write 越界拒绝码 → 期望: PREVIEW_PERMISSION_REQUIRED 或 PREVIEW_SESSION_MISMATCH；实际: undefined
+✔ PASS [322.71ms] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径
+✔ PASS [326.14ms] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC
+✖ FAIL [319.08ms] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403
+        AT-2e 伪造 permission 必须被忽略 → 仍按宿主投影 workspace-write 拒绝 → 期望: PREVIEW_PERMISSION_REQUIRED；实际: undefined
+✖ FAIL [349.27ms] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味
+        AT-3 20 轮 barrier 并发内策略结果不稳定/串味 → 期望: 每轮 full=200 且 write=403 PREVIEW_PERMISSION_REQUIRED；实际: round 1 sid-full 未按完全权限放行（期望 200 + 目标内容，实际 403 "{\"ok\":false,\"error\":\"path escapes the workspace root\"}"） | round 1 sid-write 策略码不符（期望 403 PREVIEW_PERMISSION_REQUIRED，实际 403 "{\"ok\":false,\"error\":\"path escapes the workspace root\"}"） | round 2 sid-full 未按完全权限放行（期望 200 + 目标内容，实际 403 "{\"ok\"…
+合计: 8 用例, PASS 2, FAIL 6, SKIP(degraded) 0
+SUITE-PREVIEW-AT SUMMARY: total=8 pass=2 fail=6 degraded=0
+
+════════════ 验收总报告 ════════════
+✔ PASS  suite-core.mjs  (exit=0)
+✔ PASS  suite-host.mjs  (exit=0)
+✔ PASS  suite-browser.mjs  (exit=0)
+✔ PASS  suite-reasoning.mjs  (exit=0)
+✔ PASS  suite-statusqueue-core.mjs  (exit=0)
+✖ FAIL  suite-statusqueue-browser.mjs  (exit=1)
+✖ FAIL  suite-preview-policy.mjs  (exit=1)
+✖ FAIL  adversarial/preview-policy-attack.mjs  (exit=1)
+ACCEPTANCE-ALL SUMMARY: suites=8 failed=3 skipped=0 exit=1
+EXIT=1

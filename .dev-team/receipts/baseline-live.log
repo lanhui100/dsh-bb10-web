@@ -1,0 +1,117 @@
+
+🧪 [MOCK] 高隔离 mock 宿主已启动: http://127.0.0.1:39661（真实链路已关闭，Q20_LIVE=1 可恢复）
+
+📦 [SANDBOX] 测试会话物理隔离沙箱已建立: /tmp/q20-test-sandbox-IXWQQD
+
+======================================================
+▶ RUNNING: Pre-check: Bootstrap API Verification
+------------------------------------------------------
+✔ PASSED: Pre-check: Bootstrap API Verification (2ms)
+
+======================================================
+▶ RUNNING: 场景一：新会话冷启动与首轮对话 (Empty sessionId Normalization & Full SSE Stream)
+------------------------------------------------------
+✔ PASSED: 场景一：新会话冷启动与首轮对话 (Empty sessionId Normalization & Full SSE Stream) (6ms)
+
+======================================================
+▶ RUNNING: 场景二：连续多轮对话 (Session Continuation on Same Session)
+------------------------------------------------------
+✔ PASSED: 场景二：连续多轮对话 (Session Continuation on Same Session) (3ms)
+
+======================================================
+▶ RUNNING: 场景三：历史记录解压与读取 (History Loading via /api/history)
+------------------------------------------------------
+✔ PASSED: 场景三：历史记录解压与读取 (History Loading via /api/history) (4ms)
+
+======================================================
+▶ RUNNING: 场景四：模型切换测试 (Model Switching via /api/bootstrap dynamic list)
+------------------------------------------------------
+    Selected alternative model: ponyllm -> deepseek-v4-flash
+✔ PASSED: 场景四：模型切换测试 (Model Switching via /api/bootstrap dynamic list) (3ms)
+
+======================================================
+▶ RUNNING: 场景五：工作区切换测试 (Workspace Switching & Session Listing)
+------------------------------------------------------
+    Selected alternative workspace: /tmp
+✔ PASSED: 场景五：工作区切换测试 (Workspace Switching & Session Listing) (6ms)
+
+======================================================
+▶ RUNNING: 场景六：极值与异常边界测试 (Edge Cases, Special Characters & Invalid Session Fault Tolerance)
+------------------------------------------------------
+    -> Subtest 6.1: Special characters and multiline prompt
+    -> Subtest 6.2: Missing prompt parameter validation
+    -> Subtest 6.3: Query validation on /api/sessions and /api/history
+    -> Subtest 6.4: Query history with non-existent sessionId
+    -> Subtest 6.5: Chat stream with non-existent / arbitrary sessionId
+✔ PASSED: 场景六：极值与异常边界测试 (Edge Cases, Special Characters & Invalid Session Fault Tolerance) (11ms)
+
+======================================================
+🧹 [CLEANUP] 开始归档与清理测试会话 (对齐 DSH Web 官方归档)...
+------------------------------------------------------
+  共定位到 5 个测试会话待归档与清理:
+  ✔ 已归档并清理: session-mw47ocjr1tvcxm [tracked] (/tmp/q20-test-sandbox-IXWQQD/main-ws)
+  ✔ 已归档并清理: session-mw47ock3euwsa6 [tracked] (/tmp/q20-test-sandbox-IXWQQD/main-ws)
+  ✔ 已归档并清理: session-mw47ock9p62kzx [tracked] (/tmp/q20-test-sandbox-IXWQQD/alt-ws)
+  ✔ 已归档并清理: session-mw47ockce2n0pv [tracked] (/tmp/q20-test-sandbox-IXWQQD/main-ws)
+  ✔ 已归档并清理: arbitrary-ghost-session-id-00000 [tracked] (/tmp/q20-test-sandbox-IXWQQD/main-ws)
+✔ 会话清理完毕并通过复查：共归档 5，彻底清理 5，工作区 0 残留。
+======================================================
+
+🧹 [SANDBOX] 物理隔离沙箱目录已彻底回收: /tmp/q20-test-sandbox-IXWQQD
+
+
+======================================================
+                  TEST SUITE REPORT                   
+======================================================
+✔ PASS [     2ms] : Pre-check: Bootstrap API Verification
+    - workspacesCount: 0
+    - modelsCount: 4
+    - sandboxWorkspace: /tmp/q20-test-sandbox-IXWQQD/main-ws
+    - defaultModel: ponyllm:glm-5.3-flash
+✔ PASS [     6ms] : 场景一：新会话冷启动与首轮对话 (Empty sessionId Normalization & Full SSE Stream)
+    - sessionId: session-mw47ocjr1tvcxm
+    - firstRoundLength: 93
+    - deltaEventsCount: 1
+    - deltaSample: [MOCK] 收到：请用一句话回答：什么是量子计算？ [重要交互规范：回答和汇报务必高度精炼、开门见山；仅简明扼要汇。本...
+    - sseEventsCount: 3
+    - confirmedPermissionInStartEvent: workspace-write
+✔ PASS [     3ms] : 场景二：连续多轮对话 (Session Continuation on Same Session)
+    - continuedSessionId: session-mw47ocjr1tvcxm
+    - round2ResponseLength: 59
+    - round2Sample: [MOCK] 收到：请简述它的两个具体应用场景。。本回复由 Q20 测试 mock 宿主合成，不代表任何真实模型输出。...
+    - deltaCount: 1
+✔ PASS [     4ms] : 场景三：历史记录解压与读取 (History Loading via /api/history)
+    - totalMessages: 4
+    - rolesSequence: user -> assistant -> user -> assistant
+    - round1User: 请用一句话回答：什么是量子计算？
+    - round1AssistantLen: 152
+    - round2User: 请简述它的两个具体应用场景。
+    - round2AssistantLen: 152
+✔ PASS [     3ms] : 场景四：模型切换测试 (Model Switching via /api/bootstrap dynamic list)
+    - testedProvider: ponyllm
+    - testedModel: deepseek-v4-flash
+    - confirmedModelInStartEvent: deepseek-v4-flash
+    - confirmedPermissionInStartEvent: workspace-write
+    - newSessionId: session-mw47ock3euwsa6
+    - responseLength: 93
+    - responsePreview: [MOCK] 收到：请只回复一个单词：PONG [重要交互规范：回答和汇报务必高度精炼、开门见山；仅
+✔ PASS [     6ms] : 场景五：工作区切换测试 (Workspace Switching & Session Listing)
+    - inspectedRealWorkspace: /tmp
+    - existingSessionsInRealWorkspace: 0
+    - sandboxAltWorkspace: /tmp/q20-test-sandbox-IXWQQD/alt-ws
+    - createdSessionId: session-mw47ock9p62kzx
+    - responseSample: [MOCK] 收到：请输出当前测试标识：WS_SWITCH_OK [重要交互规范：回答和汇报务必高度
+✔ PASS [    11ms] : 场景六：极值与异常边界测试 (Edge Cases, Special Characters & Invalid Session Fault Tolerance)
+    - specialPromptOk: true
+    - specialSessionId: session-mw47ockce2n0pv
+    - emptyPromptValidated: true
+    - queryValidationOk: true
+    - nonExistentSessionHandled: true
+    - ghostSessionStreamStatus: 200
+    - ghostSessionHandled: true
+------------------------------------------------------
+Total: 7 | Passed: 7 | Failed: 0
+Total Elapsed Time: 35ms
+======================================================
+
+live exit=0

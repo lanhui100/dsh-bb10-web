@@ -324,3 +324,129 @@ node tests/acceptance/run-all.mjs           # exit 1（suites=4 failed=1 skipped
 
 1. `node tests/acceptance/suite-reasoning.mjs` → **exit 0**（A1–A12 全绿），且 `artifacts/a9-effort-rollback.png` 中徽标保持 `· High`。
 2. A12 绿相要求 mock 同时实现 `Q20_MOCK_HOST_CATALOG_FAIL=1`（全失败）与 `Q20_MOCK_HOST_CATALOG_FAIL_AFTER=<n>`（成功 n 次后失败）。
+
+---
+
+# 红相（Wave 2026-11-06）— 预览越界读取的会话策略授权（preview-policy）
+
+- Owner: **test-agent**（独立验收方；L2-T 功能契约 + L2-AT 三类对抗；Executor 只读本波测试文件）
+- 唯一契约来源: [contract-wave-2026-11-06.md](.dev-team/contract-wave-2026-11-06.md)（§1.1 纯函数字段 / §1.2 错误码表 / §1.3 `/api/file` 处理顺序 / §1.4 接缝 / §2 决策顺序真值表 / §3 A1–A9 / §3bis AT-1…AT-3）
+- 红相落盘时间: **2026-11-06T08:11+08:00**（本机 `node v22.21.0`，仓库根 `<repo>`）
+- 物理日志: [red-preview-policy.log](tests/acceptance/artifacts/red-preview-policy.log) · [red-preview-policy-at.log](tests/acceptance/artifacts/red-preview-policy-at.log) · [red-preview-policy-runall.log](tests/acceptance/artifacts/red-preview-policy-runall.log)
+- 红相原语：`lib/preview-policy.mjs` 空桩（`decidePreviewReadAccess` 函数体仅 `throw new Error('NotImplemented')`）+ `server.mjs` 的 `/api/file` 尚不识别 `session` query。
+
+## 8.1 复现命令（原样可跑）
+
+```bash
+cd <repo>
+
+# L2-T 功能契约（A1–A5 纯函数 / A6–A9 服务端集成，隔离 mock 实例）
+node tests/acceptance/suite-preview-policy.mjs            # → exit 1（红相）
+
+# L2-AT 三类对抗（失败/超时注入 · 畸形负载 · barrier 并发竞态）
+node tests/acceptance/adversarial/preview-policy-attack.mjs   # → exit 1（红相）
+
+# 聚合总入口（8 套件；本波两套件已登记其中）
+node tests/acceptance/run-all.mjs
+```
+
+退出码语义沿用既有约定（0=PASS / 1=FAIL / 2=套件启动失败 / 3=显式 SKIP(DEGRADED)）。
+
+## 8.2 用例总览（22 条 = L2-T 14 + L2-AT 8）
+
+| 套件 | 用例 | 契约条目 | 红相结果 |
+|:--|:--|:--|:--|
+| suite-preview-policy | A1 快路径 a（4 组参数） | §2 a / §3 A1 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A2 无 session 越界（4 组参数） | §2 b / §3 A2 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A3 c 步会话归属（5 组参数） | §2 c / §3 A3 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A4 d 步权限（6+1 组） | §2 d / §3 A4 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A5 e 步放行 + 9 组畸形输入 | §2 e / T10 / §3 A5 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A6 无 session 越界字节等价 + 区内 200 | §1.3 铁律 / §3 A6 | ✔ PASS（向后兼容护栏，实施前即绿） |
+| suite-preview-policy | A6b 未注册工作区仍 403 且不泄路径 | §1.3 / §3 A6 | ✔ PASS（护栏，实施前即绿） |
+| suite-preview-policy | A7 快路径零宿主调用（`PROJECTIONS_FAIL=1` + RPC 收据=0） | §1.3 / §3 A7 | ✔ PASS（护栏，实施前即绿） |
+| suite-preview-policy | A8 完全权限 + 同 cwd 放行越界白名单文件 | §3 A8 | ✖ FAIL（断言失败：期望 200，实际 403） |
+| suite-preview-policy | A9.1a 宿主失败（FAIL 接缝）→ 403 UNAVAILABLE + `[PREVIEW]` warn | §1.3③ / §3 A9.1 | ✖ FAIL（断言失败：无 code） |
+| suite-preview-policy | A9.1b 该 sid 无投影（values 无 permissions）→ 403 UNAVAILABLE | §1.3③ / §3 A9.1 | ✖ FAIL（断言失败：无 code） |
+| suite-preview-policy | A9.2 workspace-write 越界 → 403 PERMISSION_REQUIRED | §3 A9.2 | ✖ FAIL（断言失败：无 code） |
+| suite-preview-policy | A9.3 session 指向别的 cwd → 403 SESSION_MISMATCH | §3 A9.3 | ✖ FAIL（断言失败：无 code） |
+| suite-preview-policy | A9.4 完全权限后仍 415（.bin）/ 413（>2MB 文本） | §3 A9.4 / §4-1 | ✖ FAIL（断言失败：期望 415，实际 403） |
+| adversarial | AT-1a `PROJECTIONS_FAIL=1`（该 sid 本为完全权限）→ fail-closed + 无字节出网 + warn | §3bis AT-1 | ✖ FAIL（断言失败：无 code） |
+| adversarial | AT-1b `PROJECTIONS_DELAY_MS=6000` → 403 且墙钟 ≤3000ms；区内 ≤500ms | §3bis AT-1 | ✖ FAIL（断言失败：无 code） |
+| adversarial | AT-1c 接缝无该 sid 投影 → 403 UNAVAILABLE | §3bis AT-1 | ✖ FAIL（断言失败：无 code） |
+| adversarial | AT-2a `..%2f` 编码穿越（无 session / workspace-write / 完全权限三读法） | §3bis AT-2 | ✖ FAIL（断言失败：workspace-write 无策略码） |
+| adversarial | AT-2b/c NUL(`%00`) · ≥4096B 超长 path · `../../etc/passwd` | §3bis AT-2 | ✔ PASS（护栏，实施前即绿） |
+| adversarial | AT-2d 伪造 session（穿越/超长/含分隔符/空串/重复）+ 零 RPC | §3bis AT-2 | ✔ PASS（护栏，实施前即绿） |
+| adversarial | AT-2e 客户端自述 `permission=danger-full-access` 被忽略 | §3bis AT-2 / §4-4 | ✖ FAIL（断言失败：无策略码） |
+| adversarial | AT-3 两 sid barrier 并发 20 轮 → 无策略串味 | §3bis AT-3 | ✖ FAIL（断言失败：full 未放行） |
+
+红相汇总：`total=14 pass=3 fail=11 degraded=0`（exit 1）· `total=8 pass=2 fail=6 degraded=0`（exit 1）·
+`run-all` 聚合：`suites=8 failed=3 skipped=0 exit=1`（另两家既有红相：`suite-statusqueue-browser` A8 为**前序波次既有失败**，与本波次无关——本波未改动 `server.mjs` / `static/index.html`）。
+
+## 8.3 关键失败断言（期望 vs 实际，逐条原样摘自日志）
+
+| 用例 | 失败断言 | 期望 | 实际 |
+|:--|:--|:--|:--|
+| A1–A5 | `decidePreviewReadAccess` 不得 throw | 四字段对象 | `threw: NotImplemented`（空桩） |
+| A8 | 完全权限 + 同 cwd + 越界白名单文件 → status | `200` | `403` |
+| A9.1a/A9.1b | 宿主失败 / 无投影 → 响应 `code` | `PREVIEW_POLICY_UNAVAILABLE` | `undefined`（旧体无 code） |
+| A9.2 | workspace-write 越界 → `code` | `PREVIEW_PERMISSION_REQUIRED` | `undefined` |
+| A9.3 | session 指向别 cwd → `code` | `PREVIEW_SESSION_MISMATCH` | `undefined` |
+| A9.4 | 完全权限下 .bin → status | `415` | `403` |
+| AT-1a/b/c | 注入失败/超时/无投影 → `code` | `PREVIEW_POLICY_UNAVAILABLE` | `undefined` |
+| AT-2a | workspace-write 编码穿越 → 拒绝码 | `PREVIEW_PERMISSION_REQUIRED` 或 `SESSION_MISMATCH` | `undefined` |
+| AT-2e | 伪造 permission 被忽略 → 拒绝码 | `PREVIEW_PERMISSION_REQUIRED` | `undefined` |
+| AT-3 | 20 轮并发：每轮 full=200 / write=403 | 稳定双结果 | `round 1 sid-full 未按完全权限放行（实际 403 path escapes…）` |
+
+## 8.4 接缝状态（契约 §1.4）
+
+| 接缝 | 实施前状态 | 说明 |
+|:--|:--|:--|
+| `Q20_MOCK_HOST_PROJECTIONS` | 已存在（`mockSeamProjections`）但 `/api/file` **从不读取**（无 `session` query） | A8/A9/AT-3 用它注入「权威投影」；A8 用例断言 RPC 收据 `session/projections ≥1` 作为接缝活性证据 |
+| `Q20_MOCK_HOST_PROJECTIONS_FAIL=1` | **不存在** | A9.1a/AT-1a 用「FAIL + 该 sid 本为完全权限」的组合判定：若接缝未实现则 mock 仍返回完全权限 → 必须 200 → 用例失败。故该接缝的真实性由行为断言强制 |
+| `Q20_MOCK_HOST_PROJECTIONS_DELAY_MS=6000` | **不存在** | AT-1b 同时断言「403 UNAVAILABLE + 墙钟 ≤3000ms」 |
+| `Q20_MOCK_HOST_RPC_LOG` | 已存在（`mockNoteRpc`） | A7 用「`session/projections` 收据 = 0」物理计量「快路径零宿主调用」；AT-2d 用同一计量 + 3000ms 延迟接缝证明非法 session 未发起 RPC |
+
+> **给实现者的硬事实（不是放宽断言的理由）**：mock 分支 `callDshWebRpc` 对 `Q20_MOCK_HOST` 短路实现，**不校验 `timeoutMs`**。
+> 因此 `Q20_MOCK_HOST_PROJECTIONS_DELAY_MS` 的延迟必须自身带 2500ms 上限（与 `PROJECTIONS_TIMEOUT_MS` 同级 race），
+> 否则 AT-1b 的墙钟断言（≤3000ms）必然失败——契约 §3bis AT-1 第 2 行明确要求该上限。
+
+## 8.5 红相真实性核查（防假红）
+
+1. `node --check tests/acceptance/suite-preview-policy.mjs`、`node --check tests/acceptance/adversarial/preview-policy-attack.mjs`、`node --check tests/acceptance/lib/preview-host.mjs` 均通过；两套件均正常输出 `SUITE-* SUMMARY`（**非 exit 2**，无 `MODULE_NOT_FOUND` / `SYNTAX` 失败）。
+2. 纯函数的 `throw new Error('NotImplemented')` 被用例显式归类为**断言失败**（`不得 throw（契约 §1.1）`），不是逃逸的执行异常；A1–A5 的失败点是行为断言，不是导入失败。
+3. 服务端用例的失败点全部是行为断言（`200 vs 403` / `code undefined vs 冻结码` / `415 vs 403`），无 500、无连接错误。
+4. 实施前即绿的 5 条（A6/A6b/A7/AT-2b·c/AT-2d）是**向后兼容与畸形输入护栏**，语义为「实施后必须保持绿」，不是待修缺陷（同类口径见 2026-10-16 波次 A10 说明）。
+5. 输出脱敏：`grep -cE '/hom[e]/[a-zA-Z0-9_.-]+/' tests/acceptance/artifacts/red-preview-policy*.log` → `0 0 0`。
+6. 隔离与零污染：每用例独立 mock 实例（临时 `DSH_HOME` + 临时工作区根 + 临时 HOME），`stop()` 内回收；跨用例不复用实例（规避 `session/projections` 15s 正/负缓存串味，契约 §3bis 对抗前提）。
+7. 无 sleep 竞态：AT-3 的「同时性」由**同一 tick 内并发发起两条请求**实现（barrier），结果按轮逐条断言；日志等待用 `waitForLog` 条件轮询，无盲等判定。
+8. 冻结产物零改写：本波只新增 `red-preview-policy*.log`；浏览器套件跑动覆盖的既有 PNG 已按 Lead 指令 `git checkout -- tests/acceptance/artifacts/` 恢复（`git status --porcelain tests/acceptance/artifacts` 仅剩 3 个 `?? red-preview-policy*.log`）。
+
+## 8.6 契约歧义（已上报 Lead 裁决；测试取「安全交集」不自行改契约）
+
+1. **重复 `session` 参数**：§3bis AT-2 要求「重复参数按 `!sessionId` 处理 → 403 `PREVIEW_OUT_OF_SCOPE`」，但 §1.3 只声明「新增可选 query `session`」未定义多值语义，而 `searchParams.get()` 只取首值（`a` 恰好通过 `isValidSessionId`）。
+   用例断言取交集：**403 + `error` 为 §1.2 冻结文案之一 + 无字节出网**（不强制具体 code）。
+2. **未注册工作区 + 无 session 的响应字面量**：§1.3 未固定「`workspace is not registered`（既有）」与「`path escapes the workspace root`（b 步统一）」二选一；用例（A6b）断言取集合，两者皆 fail-closed。
+3. **带（非法）`session` 的 403 是否可含 `code`**：§1.3 的「逐字节等价」只约束**不带 `session`** 的请求；故 AT-2d 只断言 `error` 文案 + `code ∈ {缺省, PREVIEW_OUT_OF_SCOPE}`；A6（真·无 session）则保持严格逐字节断言。
+4. **AT-2a 完全权限 + 编码穿越**：§2 真值表允许 `200`（越界读取正是「完全权限」的语义），§3bis 只禁「**未授权** 200」。用例接受两种实现：① `200` 且内容必须逐字等于 realpath 解析出的那个真实目标（不得借穿越扩大可达面）；② `400/403/404` 的 fail-closed 收紧。绝不接受 500 或空体 200。
+5. **AT-3 二段（同一 sid 改接缝后沿用 15s 缓存）**：mock 接缝由 spawn 时 env 固定，单实例内无法改接缝；且契约 §3bis AT-3 明示「允许沿旧投影（缓存语义，非缺陷）」。故该子项**不设断言**（避免无断言用例），在此显式记录为「靠 review」。
+6. **新增测试辅助文件**：`lib/harness.mjs` 为其它套件共用的冻结件（且未暴露 `Q20_MOCK_HOST_PROJECTIONS*` 接缝与子进程 stderr 捕获），故本波新增 `tests/acceptance/lib/preview-host.mjs`（纯新增，未改动任何既有文件），供两套件复用。若 Lead 要求收敛文件数，可内联回两个套件。
+
+## 8.7 冻结清单（sha256，Lead 复核后置只读）
+
+| 文件 | sha256 |
+|:--|:--|
+| `tests/acceptance/suite-preview-policy.mjs`（L2-T：A1–A9，14 条） | `f4891f94c3f51fed4318bd56db7e3a887c63bd7c4a3fece23c9c333a6a979e3b` |
+| `tests/acceptance/adversarial/preview-policy-attack.mjs`（L2-AT：AT-1/2/3，8 条） | `7758b5907369e1b999cacf480b19f7f4861c0aa632ad9a09de91261663f6e9fc` |
+| `tests/acceptance/lib/preview-host.mjs`（本波新增：隔离实例 + 原始 HTTP 断言面） | `9ab4ef2ce3aa6ea56bfb032c08703ea2a51fb77679a97045175ce66704912ab2` |
+| `tests/acceptance/run-all.mjs`（登记两套件） | `1fbab93f051a66535688b13dcfb84d71d4b9dbfbc84e58327927f924332782dd` |
+| `tests/acceptance/artifacts/red-preview-policy.log`（原始 stdout，`EXIT=1`） | 见文件头时间戳与本表 8.3 |
+| `tests/acceptance/artifacts/red-preview-policy-at.log`（原始 stdout，`EXIT=1`） | 同上 |
+| `tests/acceptance/artifacts/red-preview-policy-runall.log`（聚合 8 套件，`exit=1`） | 同上 |
+
+## 8.8 本波绿相判据（T-SRV / T-WEB 完成后由 Lead 复核）
+
+1. `node tests/acceptance/suite-preview-policy.mjs` → **exit 0**（`total=14 pass=14 fail=0 degraded=0`）。
+2. `node tests/acceptance/adversarial/preview-policy-attack.mjs` → **exit 0**（`total=8 pass=8 fail=0 degraded=0`）。
+3. `node tests/acceptance/run-all.mjs` → 本波两套件 `✔ PASS`；其余套件不得因本波回落（`suite-statusqueue-browser` 的既有红相是否转绿与本波次无关）。
+4. 实施者不得修改本波测试文件（以 §8.7 sha256 为准）；若断言与契约冲突，停下上报 Lead，**不得**为转绿放宽断言。
+5. 绿相自证时同样需要落 `tests/acceptance/artifacts/red-preview-policy*.log` 之外的独立绿相日志，并保持 `git status --porcelain tests/acceptance/artifacts` 只显示本波新增日志。

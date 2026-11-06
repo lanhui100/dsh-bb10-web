@@ -1,0 +1,38 @@
+✔ history image chip from /api/history attachments :: IMG_20260919_102946.png (via transcript scan)
+✔ overlay opens on chip click
+✔ fullscreen image decoded :: {"w":720,"h":720}
+✔ close button hides overlay
+✔ markdown file chips rendered (expected 3) :: {"chips":3,"pathChips":2,"imgChips":1}
+✔ external link left as literal text :: 📎 文档📎 日志[外链](https://example.com/page)![code](.q20-preview-browser-probe.md)
+✔ code-span reference left literal (no chip) :: 📎 文档📎 日志[外链](https://example.com/page)![code](.q20-preview-browser-probe.md)
+✔ md preview fetched via /api/file and rendered :: Q20 browser probe
+•markdown 渲染探针
+
+🖼 .q20-preview-browser-probe.png
+
+✔ md preview uses markdown markup
+✔ md preview renders inner file chips
+✔ inner chip opens preview in place (delegation) :: 预览 · .q20-preview-browser-probe.png
+✔ Esc closes preview (PC fallback)
+✔ txt preview exact content :: "Q20-BROWSER-PROBE-LINE-1\n第二行内容\n"
+✔ markdown attachment image chip
+✔ markdown attachment image decodes :: {"w":720,"h":720}
+✔ shortcuts swallowed while preview modal is open
+✔ out-of-workspace path refused with honest message :: 该文件不在当前工作区内，已拒绝读取
+✔ F2: embedded-cwd / non-whitelisted markdown stays literal :: [跨工作区](/api/file?cwd=%2Fhome%2Fdm%2Fdsh-q20-web&path=.q20_token&name=a.txt)
+✔ F1: alias cannot unlock a non-whitelisted workspace file :: status=415 type=application/json; charset=utf-8
+✔ F1: forged chip shows honest refusal (no content) :: 该类型不支持预览（仅支持图片 / txt / md）
+✔ thumbless image chip is not a collapsed sliver :: {"chipHeight":20,"chipText":"🖼 .q20-preview-browser-probe.png","tableChips":1,"chips":2,"text":"🖼 .q20-preview-browser-probe.png表头文件a📎 表内[m](mailto:a@b.md) [v](vscode:foo.md)"}
+✔ table cell references become chips :: {"chipHeight":20,"chipText":"🖼 .q20-preview-browser-probe.png","tableChips":1,"chips":2,"text":"🖼 .q20-preview-browser-probe.png表头文件a📎 表内[m](mailto:a@b.md) [v](vscode:foo.md)"}
+✔ scheme targets stay literal :: {"chipHeight":20,"chipText":"🖼 .q20-preview-browser-probe.png","tableChips":1,"chips":2,"text":"🖼 .q20-preview-browser-probe.png表头文件a📎 表内[m](mailto:a@b.md) [v](vscode:foo.md)"}
+✔ assistant message deliverables cards rendered :: count=2
+✔ deliverable card name matches :: delivered_card.png
+✔ deliverables card click opens fullscreen preview :: 预览 · delivered_card.png
+✔ local echo image chip in user bubble :: {"count":2,"name":"local-echo.png","inlineThumb":true}
+✔ local echo thumb is inline data URL (no round-trip)
+✔ local echo fullscreen preview + title :: 预览 · local-echo.png
+
+==== FILE PREVIEW E2E SUMMARY ====
+total=29 passed=29 failed=0
+history attachment fixture: found (transcript scan)
+preview exit=0

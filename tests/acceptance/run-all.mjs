@@ -22,7 +22,17 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // 2026-10-19 Wave STATUSQUEUE-CORE (A1–A4) 契约 .dev-team/contract-wave-2026-10-19.md §3
 // 2026-10-19 Wave STATUSQUEUE-BROWSER (A5–A7 真实页面) 同一契约 §3
-const SUITES = ['suite-core.mjs', 'suite-host.mjs', 'suite-browser.mjs', 'suite-reasoning.mjs', 'suite-statusqueue-core.mjs', 'suite-statusqueue-browser.mjs'];
+// 2026-11-06 Wave PREVIEW-POLICY (A1–A9 功能契约 + AT-1/AT-2/AT-3 对抗) 契约 .dev-team/contract-wave-2026-11-06.md
+const SUITES = [
+  'suite-core.mjs',
+  'suite-host.mjs',
+  'suite-browser.mjs',
+  'suite-reasoning.mjs',
+  'suite-statusqueue-core.mjs',
+  'suite-statusqueue-browser.mjs',
+  'suite-preview-policy.mjs',
+  path.join('adversarial', 'preview-policy-attack.mjs'),
+];
 
 function runSuite(file) {
   return new Promise((resolve) => {
