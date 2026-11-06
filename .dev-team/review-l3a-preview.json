@@ -1,52 +1,64 @@
 {
-  "verdict": "PASS",
-  "audited_scopes": [
-    "server.mjs",
-    "lib/preview-policy.mjs",
-    "static/index.html"
-  ],
-  "findings": [
-    {
-      "file": "server.mjs",
-      "line": 397,
-      "rule": "LEAK",
-      "counterexample_cmd": "cd <HOME>/dsh-q20-web && node -e 'const fs=require(\"fs\");const s=fs.readFileSync(\"server.mjs\",\"utf8\");const a=s.indexOf(\"function mockApplyRpcTimeout(\");const b=s.indexOf(String.fromCharCode(10)+\"}\"+String.fromCharCode(10),a)+3;const f=new Function(\"return (\"+s.slice(a,b)+\")\")();const t0=Date.now();f(new Promise(r=>setTimeout(()=>r({ok:true}),6000)),2500).then(v=>{console.log(\"settle_ms\",Date.now()-t0,JSON.stringify(v));});process.on(\"exit\",()=>{console.log(\"exit_ms\",Date.now()-t0,\"residual_timeouts\",process.getActiveResourcesInfo().filter(x=>/Timeout/.test(x)).length);});'  # 期望：超时 settle 后不残留注入延迟的定时器（进程收尾 ≈2500ms）；实际：settle_ms 2503 时仍有 1 个 Timeout 句柄存活，进程 6003ms 才退出（mockHandleRpcAsync 的 delay 定时器在超时分支既未 clearTimeout 也未 unref）。mock-only：生产分支零影响，无状态改动，无双 settle（settled 守卫有效）。",
-      "severity": "ADVISORY"
-    },
-    {
-      "file": "server.mjs",
-      "line": 1085,
-      "rule": "TIMEOUT",
-      "counterexample_cmd": "node /tmp/l3a-probe4.mjs  # 期望：策略查询墙钟 ≤2500ms（PROJECTIONS_TIMEOUT_MS，契约 §1.6），到点即 403 PREVIEW_POLICY_UNAVAILABLE；实际：生产分支 http.request 的 timeout 是「socket 空闲超时」，滴流宿主（每 800ms 一字节、总长 4800ms）下墙钟 5612ms 才返回 403。mock 侧（mockApplyRpcTimeout）是硬墙钟，故 AT-1b 的 2500ms 断言只覆盖「宿主静默挂死」形态，不覆盖「慢滴流」形态。fail-closed 未被破坏。",
-      "severity": "ADVISORY"
-    },
-    {
-      "file": "server.mjs",
-      "line": 6754,
-      "rule": "NFR_VIOLATION",
-      "counterexample_cmd": "node /tmp/l3a-probe3.mjs  # 期望：越界取数有界（每 sid 单飞 + ≤2500ms，且不随客户端自带 sid 数量线性放大）；实际：5 个互不存在但格式合法的伪 sid 并发 → 5 次并发真实宿主 RPC（1511ms 内全部发出，Q20_MOCK_HOST_RPC_LOG 计 10 条），进程内 sessionProjectionsCache 每 sid 一条、>2000 条触发 sessionProjectionsCache.clear() 全量清空。本地未认证调用方可放大宿主 RPC 并打散面板缓存；响应仍一律 fail-closed 403，无授权泄漏。",
-      "severity": "ADVISORY"
-    },
-    {
-      "file": "server.mjs",
-      "line": 5136,
-      "rule": "CORRECTNESS",
-      "counterexample_cmd": "non-machine（需同一进程内让宿主投影在 15s TTL 内变化，静态 env 接缝无法构造）。语义记录：正缓存命中 → 会话权限被降级后最多 15s 内仍放行越界读；负缓存/空 values 命中 → 瞬时宿主失败或空投影后最多 15s 内把本可放行的请求误拒为 PREVIEW_POLICY_UNAVAILABLE。契约 §1.6（负缓存 15s 不重打宿主）与 §3bis AT-3 二段已显式接受这两条，故非缺陷；跨 sid 串味不成立——key 恒为 String(sessionId)（server.mjs:5136/5147/5152 与 mock 侧 mockHandleRpc case 'session/projections' 按 req.sessionId 精确取值，无单键兜底），实测 20 轮 barrier 并发的同 sid/异 sid 结果稳定。",
-      "severity": "ADVISORY"
-    },
-    {
-      "file": "server.mjs",
-      "line": 4309,
-      "rule": "SECURITY",
-      "counterexample_cmd": "node /tmp/l3a-probe5.mjs  # 期望：宿主 workingDirectory 为 ~/ws-other、请求 cwd 为 ws-l3a-own → c 步命中 403 PREVIEW_SESSION_MISMATCH（与 A9.3 同口径）；实际：path.resolve(\"~/ws-other\") 后 realpathSync 抛 ENOENT → sessionCwd 静默降成空串 → c 步被跳过 → 200 且响应体为跨工作区文件字节。实机宿主当前返回绝对路径（已实测 <HOME>/dsh-q20-web），故当前不触发；一旦宿主回到契约 §0.4 收据记录的 ~/ 形态，A9.3 的所有权拦截会静默失效（fail-open 到仅看 permission）。契约 §1.3「realpath 失败则视为空串→跳过 c 步」使该行为字面合规，故列 ADVISORY 而非 BLOCKING。",
-      "severity": "ADVISORY"
-    },
-    {
-      "file": "static/index.html",
-      "line": 9554,
-      "rule": "CORRECTNESS",
-      "counterexample_cmd": "non-machine（需真机/浏览器切会话时序）。语义记录：data-fpsid 取的是卡片渲染那一刻的全局 currentSessionId，不是该条消息/回合的归属会话；切会话窗口内被重渲染的历史卡片可能带错 sid，服务端 c 步会回 403 PREVIEW_SESSION_MISMATCH（文案「无法核验该文件的读取授权」）。fail-closed，且改动前同场景也是 403，未引入回归；filePreviewSeq + __aborted + closeFilePreview 的序号/中止护栏完好，403 文案解析在 readyState===4 且 seq 匹配后才执行，连点不会把旧响应的 code 套到新卡片上。",
-      "severity": "ADVISORY"
-    }
-  ]
+ "verdict": "PASS",
+ "audited_scopes": [
+  "server.mjs",
+  "lib/preview-policy.mjs",
+  "static/index.html"
+ ],
+ "findings": [
+  {
+   "file": "server.mjs",
+   "line": 397,
+   "rule": "LEAK",
+   "counterexample_cmd": "cd <HOME>/dsh-q20-web && node -e 'const fs=require(\"fs\");const s=fs.readFileSync(\"server.mjs\",\"utf8\");const a=s.indexOf(\"function mockApplyRpcTimeout(\");const b=s.indexOf(String.fromCharCode(10)+\"}\"+String.fromCharCode(10),a)+3;const f=new Function(\"return (\"+s.slice(a,b)+\")\")();const t0=Date.now();f(new Promise(r=>setTimeout(()=>r({ok:true}),6000)),2500).then(v=>{console.log(\"settle_ms\",Date.now()-t0,JSON.stringify(v));});process.on(\"exit\",()=>{console.log(\"exit_ms\",Date.now()-t0,\"residual_timeouts\",process.getActiveResourcesInfo().filter(x=>/Timeout/.test(x)).length);});'  # 期望：超时 settle 后不残留注入延迟的定时器（进程收尾 ≈2500ms）；实际：settle_ms 2503 时仍有 1 个 Timeout 句柄存活，进程 6003ms 才退出（mockHandleRpcAsync 的 delay 定时器在超时分支既未 clearTimeout 也未 unref）。mock-only：生产分支零影响，无状态改动，无双 settle（settled 守卫有效）。",
+   "severity": "ADVISORY"
+  },
+  {
+   "file": "server.mjs",
+   "line": 1085,
+   "rule": "TIMEOUT",
+   "counterexample_cmd": "node /tmp/l3a-probe4.mjs  # 期望：策略查询墙钟 ≤2500ms（PROJECTIONS_TIMEOUT_MS，契约 §1.6），到点即 403 PREVIEW_POLICY_UNAVAILABLE；实际：生产分支 http.request 的 timeout 是「socket 空闲超时」，滴流宿主（每 800ms 一字节、总长 4800ms）下墙钟 5612ms 才返回 403。mock 侧（mockApplyRpcTimeout）是硬墙钟，故 AT-1b 的 2500ms 断言只覆盖「宿主静默挂死」形态，不覆盖「慢滴流」形态。fail-closed 未被破坏。",
+   "severity": "ADVISORY"
+  },
+  {
+   "file": "server.mjs",
+   "line": 6754,
+   "rule": "NFR_VIOLATION",
+   "counterexample_cmd": "node /tmp/l3a-probe3.mjs  # 期望：越界取数有界（每 sid 单飞 + ≤2500ms，且不随客户端自带 sid 数量线性放大）；实际：5 个互不存在但格式合法的伪 sid 并发 → 5 次并发真实宿主 RPC（1511ms 内全部发出，Q20_MOCK_HOST_RPC_LOG 计 10 条），进程内 sessionProjectionsCache 每 sid 一条、>2000 条触发 sessionProjectionsCache.clear() 全量清空。本地未认证调用方可放大宿主 RPC 并打散面板缓存；响应仍一律 fail-closed 403，无授权泄漏。",
+   "severity": "ADVISORY"
+  },
+  {
+   "file": "server.mjs",
+   "line": 5136,
+   "rule": "CORRECTNESS",
+   "counterexample_cmd": "non-machine（需同一进程内让宿主投影在 15s TTL 内变化，静态 env 接缝无法构造）。语义记录：正缓存命中 → 会话权限被降级后最多 15s 内仍放行越界读；负缓存/空 values 命中 → 瞬时宿主失败或空投影后最多 15s 内把本可放行的请求误拒为 PREVIEW_POLICY_UNAVAILABLE。契约 §1.6（负缓存 15s 不重打宿主）与 §3bis AT-3 二段已显式接受这两条，故非缺陷；跨 sid 串味不成立——key 恒为 String(sessionId)（server.mjs:5136/5147/5152 与 mock 侧 mockHandleRpc case 'session/projections' 按 req.sessionId 精确取值，无单键兜底），实测 20 轮 barrier 并发的同 sid/异 sid 结果稳定。",
+   "severity": "ADVISORY"
+  },
+  {
+   "file": "server.mjs",
+   "line": 4309,
+   "rule": "SECURITY",
+   "counterexample_cmd": "node /tmp/l3a-probe5.mjs  # 期望：宿主 workingDirectory 为 ~/ws-other、请求 cwd 为 ws-l3a-own → c 步命中 403 PREVIEW_SESSION_MISMATCH（与 A9.3 同口径）；实际：path.resolve(\"~/ws-other\") 后 realpathSync 抛 ENOENT → sessionCwd 静默降成空串 → c 步被跳过 → 200 且响应体为跨工作区文件字节。实机宿主当前返回绝对路径（已实测 <HOME>/dsh-q20-web），故当前不触发；一旦宿主回到契约 §0.4 收据记录的 ~/ 形态，A9.3 的所有权拦截会静默失效（fail-open 到仅看 permission）。契约 §1.3「realpath 失败则视为空串→跳过 c 步」使该行为字面合规，故列 ADVISORY 而非 BLOCKING。",
+   "severity": "ADVISORY"
+  },
+  {
+   "file": "static/index.html",
+   "line": 9554,
+   "rule": "CORRECTNESS",
+   "counterexample_cmd": "non-machine（需真机/浏览器切会话时序）。语义记录：data-fpsid 取的是卡片渲染那一刻的全局 currentSessionId，不是该条消息/回合的归属会话；切会话窗口内被重渲染的历史卡片可能带错 sid，服务端 c 步会回 403 PREVIEW_SESSION_MISMATCH（文案「无法核验该文件的读取授权」）。fail-closed，且改动前同场景也是 403，未引入回归；filePreviewSeq + __aborted + closeFilePreview 的序号/中止护栏完好，403 文案解析在 readyState===4 且 seq 匹配后才执行，连点不会把旧响应的 code 套到新卡片上。",
+   "severity": "ADVISORY"
+  }
+ ],
+ "schema_version": 2,
+ "reviewer": {
+  "kind": "subagent",
+  "session_id": "f698317b-bacf-4791-ba7f-c4d57ec47072",
+  "fresh_context": true
+ },
+ "executed_by": "f698317b-bacf-4791-ba7f-c4d57ec47072",
+ "reviewed_commit": "25d8af5",
+ "attestation": {
+  "self_signed": false,
+  "note": "independent subagent, fresh context; reviewed working-tree diff at the recorded base commit"
+ }
 }

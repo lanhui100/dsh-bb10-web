@@ -1,59 +1,71 @@
 {
-  "verdict": "FAIL",
-  "audited_scopes": [
-    "server.mjs",
-    "lib/preview-policy.mjs",
-    "static/index.html"
-  ],
-  "findings": [
-    {
-      "file": "server.mjs",
-      "line": 6781,
-      "rule": "SECURITY",
-      "severity": "BLOCKING",
-      "counterexample_cmd": "curl -s -o /dev/null -w '%{http_code} %{size_download}\\n' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=%2Fhome%2Fdm%2F.dsh%2F.credentials.yaml&session=session-mw47e45cavblex'   # 期望 403/415（凭据类路径必须被 denylist 拒绝；契约 §2 T9 对越界路径无任何排除=契约缺口，需 Lead 裁决）；actual 200 397（~/.dsh/.credentials.yaml 字节经 /api/file 出网，yaml 在白名单内）"
-    },
-    {
-      "file": "server.mjs",
-      "line": 6739,
-      "rule": "LEAK",
-      "severity": "ADVISORY",
-      "counterexample_cmd": "for p in /etc/passwd /etc/l3b-nonexistent.md; do curl -s -o /dev/null -w '%{http_code} ' \"http://127.0.0.1:3090/api/file?cwd=/tmp&path=$p\"; done   # 期望 两者同状态（HEAD 25d8af5 对照均 403 {\"ok\":false,\"error\":\"workspace is not registered\"}：git archive HEAD|tar -x -C /tmp/h && cd /tmp/h && PORT=3097 DSH_HOME=/tmp/hh Q20_MOCK_HOST=1 node server.mjs）；actual 403 404 → 授权前的 realpath 使任意路径存在性可探测，且 403→404 状态回退未被 R-3（仅裁决 403 文案）覆盖"
-    },
-    {
-      "file": "server.mjs",
-      "line": 4303,
-      "rule": "CONTRACT_BREAK",
-      "severity": "ADVISORY",
-      "counterexample_cmd": "node -e 'import(\"<HOME>/dsh-q20-web/tests/acceptance/lib/preview-host.mjs\").then(async m=>{const s=await m.launchPreviewHost({env:({workspacePath})=>({Q20_MOCK_HOST_PROJECTIONS:JSON.stringify({s1:{permissions:{},workingDirectory:workspacePath(\"ws-x\")}})})});const cwd=await m.createWorkspaceViaApi(s,\"ws-x\");const r=await m.rawRequest(s.base,\"/api/file?cwd=\"+encodeURIComponent(cwd)+\"&path=\"+encodeURIComponent(\"/etc/passwd\")+\"&session=s1\");console.log(r.status,r.text);await s.stop()})'   # 契约 §1.3 步2「currentValue 缺失视为非完全权限」→ 期望 403 PREVIEW_PERMISSION_REQUIRED；actual 403 PREVIEW_POLICY_UNAVAILABLE（两者 fail-closed，仅 code/文案漂移）"
-    },
-    {
-      "file": "server.mjs",
-      "line": 4309,
-      "rule": "SECURITY",
-      "severity": "ADVISORY",
-      "counterexample_cmd": "node -e 'import(\"<HOME>/dsh-q20-web/tests/acceptance/lib/preview-host.mjs\").then(async m=>{const s=await m.launchPreviewHost({env:{Q20_MOCK_HOST_PROJECTIONS:JSON.stringify({s1:{permissions:{currentValue:\"danger-full-access\"},workingDirectory:\"~/ws-x\"}})}});const cwd=await m.createWorkspaceViaApi(s,\"ws-x\");const r=await m.rawRequest(s.base,\"/api/file?cwd=\"+encodeURIComponent(cwd)+\"&path=\"+encodeURIComponent(\"<HOME>/.dsh/AGENTS.md\")+\"&session=s1\");console.log(r.status,r.buf.length,r.text.slice(0,40));await s.stop()})'   # 期望 403 PREVIEW_SESSION_MISMATCH（requestCwd 无法与 '~/ws-x' 核验 → fail-closed）；actual 200 1490B（realpath('~/ws-x') 失败 → sessionCwd='' → c 步被整体跳过）"
-    },
-    {
-      "file": "server.mjs",
-      "line": 6754,
-      "rule": "SECURITY",
-      "severity": "ADVISORY",
-      "counterexample_cmd": "node -e 'import(\"<HOME>/dsh-q20-web/tests/acceptance/lib/preview-host.mjs\").then(async m=>{const s=await m.launchPreviewHost({env:{},rpcLog:true});const cwd=await m.createWorkspaceViaApi(s,\"ws-x\");for(let i=0;i<20;i++){await m.rawRequest(s.base,\"/api/file?cwd=\"+encodeURIComponent(cwd)+\"&path=\"+encodeURIComponent(\"/etc/passwd\")+\"&session=l3b-amp-\"+i)}console.log(\"rpc\",m.countRpcMethod(s,\"session/projections\"),\"warn\",s.stderrText.split(\"\\n\").filter(l=>l.includes(\"[PREVIEW]\")).length);await s.stop()})'   # 期望 越界策略查询与请求方/连接绑定且限速；actual rpc 20 warn 20（客户端自称 sid 即授权主体，每唯一合法格式 sid 一次宿主 RPC + 一行 warn，无节流/无连接绑定）"
-    },
-    {
-      "file": "server.mjs",
-      "line": 4215,
-      "rule": "CORRECTNESS",
-      "severity": "ADVISORY",
-      "counterexample_cmd": "non-machine: realpath(resolveWorkspacePreviewPath:4268) → lstat(4200) → readFileSync(4215) 之间存在符号链接替换窗口；属既有模式（函数注释自认 stat→read TOCTOU），本 diff 未新增，完全权限放行下亦无额外提权面，无可机器复现的越权差异"
-    },
-    {
-      "file": "server.mjs",
-      "line": 6736,
-      "rule": "CORRECTNESS",
-      "severity": "ADVISORY",
-      "counterexample_cmd": "non-machine: 显式 Content-Length(6736) 与 sendJsonGzipAware 的 gzip 分支(5949, GZIP_MIN_BYTES=1024) 组合时，若拒绝体 ≥1024B 且客户端带 Accept-Encoding: gzip，则头为未压缩长度而体为 gzip → 头体不一致；当前全部拒绝体 <1024B（实测 54/92 字节）故不可触发，属潜伏缺陷"
-    }
-  ]
+ "verdict": "FAIL",
+ "audited_scopes": [
+  "server.mjs",
+  "lib/preview-policy.mjs",
+  "static/index.html"
+ ],
+ "findings": [
+  {
+   "file": "server.mjs",
+   "line": 6781,
+   "rule": "SECURITY",
+   "severity": "BLOCKING",
+   "counterexample_cmd": "curl -s -o /dev/null -w '%{http_code} %{size_download}\\n' 'http://127.0.0.1:3090/api/file?cwd=<HOME>/dsh-q20-web&path=%2Fhome%2Fdm%2F.dsh%2F.credentials.yaml&session=session-mw47e45cavblex'   # 期望 403/415（凭据类路径必须被 denylist 拒绝；契约 §2 T9 对越界路径无任何排除=契约缺口，需 Lead 裁决）；actual 200 397（~/.dsh/.credentials.yaml 字节经 /api/file 出网，yaml 在白名单内）"
+  },
+  {
+   "file": "server.mjs",
+   "line": 6739,
+   "rule": "LEAK",
+   "severity": "ADVISORY",
+   "counterexample_cmd": "for p in /etc/passwd /etc/l3b-nonexistent.md; do curl -s -o /dev/null -w '%{http_code} ' \"http://127.0.0.1:3090/api/file?cwd=/tmp&path=$p\"; done   # 期望 两者同状态（HEAD 25d8af5 对照均 403 {\"ok\":false,\"error\":\"workspace is not registered\"}：git archive HEAD|tar -x -C /tmp/h && cd /tmp/h && PORT=3097 DSH_HOME=/tmp/hh Q20_MOCK_HOST=1 node server.mjs）；actual 403 404 → 授权前的 realpath 使任意路径存在性可探测，且 403→404 状态回退未被 R-3（仅裁决 403 文案）覆盖"
+  },
+  {
+   "file": "server.mjs",
+   "line": 4303,
+   "rule": "CONTRACT_BREAK",
+   "severity": "ADVISORY",
+   "counterexample_cmd": "node -e 'import(\"<HOME>/dsh-q20-web/tests/acceptance/lib/preview-host.mjs\").then(async m=>{const s=await m.launchPreviewHost({env:({workspacePath})=>({Q20_MOCK_HOST_PROJECTIONS:JSON.stringify({s1:{permissions:{},workingDirectory:workspacePath(\"ws-x\")}})})});const cwd=await m.createWorkspaceViaApi(s,\"ws-x\");const r=await m.rawRequest(s.base,\"/api/file?cwd=\"+encodeURIComponent(cwd)+\"&path=\"+encodeURIComponent(\"/etc/passwd\")+\"&session=s1\");console.log(r.status,r.text);await s.stop()})'   # 契约 §1.3 步2「currentValue 缺失视为非完全权限」→ 期望 403 PREVIEW_PERMISSION_REQUIRED；actual 403 PREVIEW_POLICY_UNAVAILABLE（两者 fail-closed，仅 code/文案漂移）"
+  },
+  {
+   "file": "server.mjs",
+   "line": 4309,
+   "rule": "SECURITY",
+   "severity": "ADVISORY",
+   "counterexample_cmd": "node -e 'import(\"<HOME>/dsh-q20-web/tests/acceptance/lib/preview-host.mjs\").then(async m=>{const s=await m.launchPreviewHost({env:{Q20_MOCK_HOST_PROJECTIONS:JSON.stringify({s1:{permissions:{currentValue:\"danger-full-access\"},workingDirectory:\"~/ws-x\"}})}});const cwd=await m.createWorkspaceViaApi(s,\"ws-x\");const r=await m.rawRequest(s.base,\"/api/file?cwd=\"+encodeURIComponent(cwd)+\"&path=\"+encodeURIComponent(\"<HOME>/.dsh/AGENTS.md\")+\"&session=s1\");console.log(r.status,r.buf.length,r.text.slice(0,40));await s.stop()})'   # 期望 403 PREVIEW_SESSION_MISMATCH（requestCwd 无法与 '~/ws-x' 核验 → fail-closed）；actual 200 1490B（realpath('~/ws-x') 失败 → sessionCwd='' → c 步被整体跳过）"
+  },
+  {
+   "file": "server.mjs",
+   "line": 6754,
+   "rule": "SECURITY",
+   "severity": "ADVISORY",
+   "counterexample_cmd": "node -e 'import(\"<HOME>/dsh-q20-web/tests/acceptance/lib/preview-host.mjs\").then(async m=>{const s=await m.launchPreviewHost({env:{},rpcLog:true});const cwd=await m.createWorkspaceViaApi(s,\"ws-x\");for(let i=0;i<20;i++){await m.rawRequest(s.base,\"/api/file?cwd=\"+encodeURIComponent(cwd)+\"&path=\"+encodeURIComponent(\"/etc/passwd\")+\"&session=l3b-amp-\"+i)}console.log(\"rpc\",m.countRpcMethod(s,\"session/projections\"),\"warn\",s.stderrText.split(\"\\n\").filter(l=>l.includes(\"[PREVIEW]\")).length);await s.stop()})'   # 期望 越界策略查询与请求方/连接绑定且限速；actual rpc 20 warn 20（客户端自称 sid 即授权主体，每唯一合法格式 sid 一次宿主 RPC + 一行 warn，无节流/无连接绑定）"
+  },
+  {
+   "file": "server.mjs",
+   "line": 4215,
+   "rule": "CORRECTNESS",
+   "severity": "ADVISORY",
+   "counterexample_cmd": "non-machine: realpath(resolveWorkspacePreviewPath:4268) → lstat(4200) → readFileSync(4215) 之间存在符号链接替换窗口；属既有模式（函数注释自认 stat→read TOCTOU），本 diff 未新增，完全权限放行下亦无额外提权面，无可机器复现的越权差异"
+  },
+  {
+   "file": "server.mjs",
+   "line": 6736,
+   "rule": "CORRECTNESS",
+   "severity": "ADVISORY",
+   "counterexample_cmd": "non-machine: 显式 Content-Length(6736) 与 sendJsonGzipAware 的 gzip 分支(5949, GZIP_MIN_BYTES=1024) 组合时，若拒绝体 ≥1024B 且客户端带 Accept-Encoding: gzip，则头为未压缩长度而体为 gzip → 头体不一致；当前全部拒绝体 <1024B（实测 54/92 字节）故不可触发，属潜伏缺陷"
+  }
+ ],
+ "schema_version": 2,
+ "reviewer": {
+  "kind": "subagent",
+  "session_id": "2e3c3c2a-0ad1-4222-8140-eac4087ac477",
+  "fresh_context": true
+ },
+ "executed_by": "2e3c3c2a-0ad1-4222-8140-eac4087ac477",
+ "reviewed_commit": "25d8af5",
+ "attestation": {
+  "self_signed": false,
+  "note": "independent subagent, fresh context; reviewed working-tree diff at the recorded base commit"
+ }
 }

