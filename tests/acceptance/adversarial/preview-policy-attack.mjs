@@ -10,19 +10,22 @@
  *   AT-1 失败/超时注入 → fail-closed + 墙钟上限 + 无文件字节出网
  *   AT-2 畸形负载（编码穿越 / NUL / 超长 / 相对逃逸 / 伪造与重复 session / 客户端自述权限）→ 一律拒绝且不泄字节
  *   AT-3 竞态（danger-full-access vs workspace-write 同实例 barrier 并发 20 轮）→ 无策略串味
+ *   AT-4 mock 定时器卫生（契约 amend M-2）：DELAY 触发超时后，子进程真实退出码/退出墙钟受限，
+ *        且超时窗口之后无未处理 rejection / 未捕获异常（禁止 sleep 竞态，全部按事件计时）
  *
  * 纪律：每用例独立 mock 实例（临时 DSH_HOME + 临时工作区根）；跨用例不复用实例，
  *       以规避 session/projections 的 15s 正/负缓存串味（契约 §3bis 对抗前提）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { FULL_ACCESS_POLICY } from '../../../lib/preview-policy.mjs';
 import {
   ARTIFACT_DIR,
   assertEqual, assertFalse, assertLt, assertOk, cleanupTempDirs, createRunner, fail, redact, tempDir,
 } from '../lib/harness.mjs';
 import {
-  countRpcMethod, openPreviewWorkspace, rawRequest, waitForLog,
+  countRpcMethod, createWorkspaceViaApi, launchPreviewHostWithIpc, openPreviewWorkspace, rawRequest, waitForLog,
 } from '../lib/preview-host.mjs';
 
 const runner = createRunner('PREVIEW-AT');
@@ -40,6 +43,7 @@ const CODES = {
   mismatch: 'PREVIEW_SESSION_MISMATCH',
   permission: 'PREVIEW_PERMISSION_REQUIRED',
   unavailable: 'PREVIEW_POLICY_UNAVAILABLE',
+  sensitive: 'PREVIEW_SENSITIVE_PATH',
 };
 const LEGACY_ESCAPE_BODY = '{"ok":false,"error":"path escapes the workspace root"}';
 
@@ -275,6 +279,7 @@ async function main() {
         'session permission is unavailable',
         'session permission does not allow reading outside the workspace',
         'session does not own this workspace',
+        'preview of sensitive files is not allowed',
       ].indexOf(dup.json.error) !== -1,
       'AT-2d 重复 session 参数 → error 必须是契约 §1.2 既有文案之一',
       '§1.2 冻结文案之一', dup.json && dup.json.error);
@@ -364,6 +369,64 @@ async function main() {
       return '20 轮 barrier 并发：sid-full 恒 200（内容一致）/ sid-write 恒 403 ' + CODES.permission;
     } finally {
       await srv.stop();
+    }
+  });
+
+  // ═══════════════════ AT-4 mock 定时器卫生（契约 amend M-2）═══════════════════
+  await runner.run('AT-4 定时器卫生：DELAY=6000 触发超时后不得残留未 clear/unref 的 mock 计时器，且子进程退出墙钟受限', async () => {
+    const sid = 'session-at4-timer';
+    // 用 fork+IPC 拉起实例：唯一能从外部机器判定「残留计时器」的通道是子进程内
+    // process.getActiveResourcesInfo()（已 clear / 已 unref 的 setTimeout 不会出现在该列表）。
+    const srv = await launchPreviewHostWithIpc({
+      env: ({ workspacePath }) => ({
+        ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-at4') } }),
+        Q20_MOCK_HOST_PROJECTIONS_DELAY_MS: '6000',
+      }),
+    });
+    let exited = false;
+    try {
+      const cwd = await createWorkspaceViaApi(srv, 'ws-at4');
+      assertEqual(cwd, srv.workspacePath('ws-at4'), 'AT-4 前置：工作区 cwd 必须等于可预测路径');
+      const outsideDir = tempDir('q20-at4-out-');
+      const outsideFile = writeFile(outsideDir, 'at4-target.md', 'AT4-SECRET-BYTES\n');
+
+      const before = await srv.requestResources();
+      const timeoutsBefore = before.filter((x) => x === 'Timeout').length;
+
+      const t0 = performance.now();
+      const res = await rawRequest(srv.base, fileUrlSession(cwd, outsideFile, sid), { timeoutMs: 15000 });
+      const requestMs = performance.now() - t0;
+      assertEqual(res.status, 403, 'AT-4 延迟注入下的越界请求 → status（必须 fail-closed，且不得被延迟拖死）');
+      assertEqual(res.json && res.json.code, CODES.unavailable, 'AT-4 → code');
+      assertLt(requestMs, 3000, 'AT-4 单请求墙钟（≤ 2500ms 超时 + 500ms 抖动）');
+
+      // 此刻 6000ms 延迟定时器仍在窗口内（t≈2500ms）：快照 delta 就是 M-2 的物理证据。
+      const after = await srv.requestResources();
+      const timeoutsAfter = after.filter((x) => x === 'Timeout').length;
+      assertOk(timeoutsAfter <= timeoutsBefore,
+        'AT-4 超时后不得残留 mock 延迟计时器（须 clearTimeout 或 unref；active Timeout 数不得增加）',
+        'After ≤ Before (' + timeoutsBefore + ')', 'Before=' + timeoutsBefore + ' After=' + timeoutsAfter
+          + ' list=' + JSON.stringify(after));
+
+      const totalMs = performance.now() - t0;
+      const exitInfo = await srv.sendSigtermAndWaitExit(5000);
+      exited = true;
+      assertFalse(exitInfo.killedByForce, 'AT-4 子进程必须自行响应 SIGTERM 退出（不得被 SIGKILL 兜底）');
+      assertLt(exitInfo.ms, 2000, 'AT-4 SIGTERM 后退出墙钟（残留 mock 定时器不得把退出推到 6000ms）');
+      assertLt(totalMs + exitInfo.ms, 4000,
+        'AT-4 请求开始 → 子进程真实退出（SIGTERM 已计入）总墙钟必须 ≤ 超时 + 缓冲');
+      assertOk(exitInfo.code === 0 || exitInfo.signal === 'SIGTERM',
+        'AT-4 子进程真实退出码/信号', 'code=0 或 signal=SIGTERM',
+        'code=' + exitInfo.code + ' signal=' + exitInfo.signal);
+
+      const bad = /UnhandledPromiseRejection|uncaughtException|ERR_UNHANDLED_REJECTION/i;
+      assertFalse(bad.test(srv.stderrText || ''),
+        'AT-4 超时后不得出现未处理 rejection / 未捕获异常（mock 定时器卫生）');
+      return 'request=' + Math.round(requestMs) + 'ms; Timeout before/after=' + timeoutsBefore + '/' + timeoutsAfter
+        + '; exit=' + Math.round(exitInfo.ms) + 'ms (' + (exitInfo.signal || 'code ' + exitInfo.code) + ')';
+    } finally {
+      if (!exited) await srv.stop();
+      else srv.cleanupHome();
     }
   });
 

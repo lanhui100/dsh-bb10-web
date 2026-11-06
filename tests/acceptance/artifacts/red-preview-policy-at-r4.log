@@ -1,0 +1,41 @@
+# 红相原始日志 #2（M-2 增补轮）— Wave 2026-11-06 preview-policy (L2-AT)
+# 命令: node tests/acceptance/adversarial/preview-policy-attack.mjs
+# 时间: 2026-11-06T08:43:08+08:00  节点: v22.21.0  仓库: <repo>
+# 契约 amend: M-2 mock 定时器卫生（AT-4）
+
+# Q20 对抗套件 PREVIEW-AT (AT-1/AT-2/AT-3) — 契约 .dev-team/contract-wave-2026-11-06.md §3bis
+# 时间: 2026-11-06T00:43:08.598Z
+▶ [PREVIEW-AT] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网
+  ✔ PASS [334.48ms] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网 — 403 PREVIEW_POLICY_UNAVAILABLE; 无字节出网; warn 命中 sid
+▶ [PREVIEW-AT] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms
+  ✔ PASS [2829.82ms] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms — 越界 403 in 2505ms; 区内 200 in 2ms
+▶ [PREVIEW-AT] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+  ✔ PASS [319.32ms] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝） — 403 PREVIEW_POLICY_UNAVAILABLE
+▶ [PREVIEW-AT] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行
+  ✔ PASS [326.88ms] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行 — no-session=403 逐字节等价; write=403 PREVIEW_PERMISSION_REQUIRED; full=200
+▶ [PREVIEW-AT] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径
+  ✔ PASS [322ms] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径 — NUL=404; long(4828B)=404; ../../etc/passwd=404
+▶ [PREVIEW-AT] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC
+  ✔ PASS [327.48ms] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC — 编码穿越=403/2ms; 超长 200 字符=403/1ms; 含路径分隔=403/1ms; 空串=403/1ms; RPC=0
+▶ [PREVIEW-AT] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403
+  ✔ PASS [325.01ms] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403 — 有会话=403 PREVIEW_PERMISSION_REQUIRED; 无会话=403 旧文案; POST=405
+▶ [PREVIEW-AT] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味
+  ✔ PASS [353.57ms] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味 — 20 轮 barrier 并发：sid-full 恒 200（内容一致）/ sid-write 恒 403 PREVIEW_PERMISSION_REQUIRED
+▶ [PREVIEW-AT] AT-4 定时器卫生：DELAY=6000 触发超时后不得残留未 clear/unref 的 mock 计时器，且子进程退出墙钟受限
+  ✖ FAIL [2829.88ms] AT-4 定时器卫生：DELAY=6000 触发超时后不得残留未 clear/unref 的 mock 计时器，且子进程退出墙钟受限
+      断言失败: AT-4 超时后不得残留 mock 延迟计时器（须 clearTimeout 或 unref；active Timeout 数不得增加） → 期望: After ≤ Before (0)；实际: Before=0 After=1 list=["PipeWrap","PipeWrap","TCPServerWrap","PipeWrap","TCPSocketWrap","Timeout"]
+
+──────── PREVIEW-AT 报告 ────────
+✔ PASS [334.48ms] AT-1a PROJECTIONS_FAIL=1（该 sid 本为完全权限）→ 403 PREVIEW_POLICY_UNAVAILABLE，无文件字节出网
+✔ PASS [2829.82ms] AT-1b PROJECTIONS_DELAY_MS=6000 + 越界 → 403 PREVIEW_POLICY_UNAVAILABLE 且单请求墙钟 ≤3000ms
+✔ PASS [319.32ms] AT-1c 接缝返回无该 sid 投影（values={}）→ 403 PREVIEW_POLICY_UNAVAILABLE（缺字段=拒绝）
+✔ PASS [326.88ms] AT-2a 编码穿越（..%2f 形态）：未授权必拒且无字节出网；完全权限仅按 realpath 事实放行
+✔ PASS [322ms] AT-2b/c NUL(%00) 与 ≥4096 字节超长 path：绝不 200/500，响应体不泄绝对路径
+✔ PASS [327.48ms] AT-2d 伪造 session 参数（穿越/超长/含分隔符/空串）→ 一律按缺失处理：403 旧文案且不发起 RPC
+✔ PASS [325.01ms] AT-2e 客户端自述 permission=danger-full-access 一律被忽略（只信宿主投影）→ 仍 403
+✔ PASS [353.57ms] AT-3 竞态：danger-full-access 与 workspace-write 同实例 barrier 并发 20 轮，策略不得串味
+✖ FAIL [2829.88ms] AT-4 定时器卫生：DELAY=6000 触发超时后不得残留未 clear/unref 的 mock 计时器，且子进程退出墙钟受限
+        AT-4 超时后不得残留 mock 延迟计时器（须 clearTimeout 或 unref；active Timeout 数不得增加） → 期望: After ≤ Before (0)；实际: Before=0 After=1 list=["PipeWrap","PipeWrap","TCPServerWrap","PipeWrap","TCPSocketWrap","Timeout"]
+合计: 9 用例, PASS 8, FAIL 1, SKIP(degraded) 0
+SUITE-PREVIEW-AT SUMMARY: total=9 pass=8 fail=1 degraded=0
+EXIT=1

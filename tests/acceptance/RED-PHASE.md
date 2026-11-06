@@ -450,3 +450,99 @@ node tests/acceptance/run-all.mjs
 3. `node tests/acceptance/run-all.mjs` → 本波两套件 `✔ PASS`；其余套件不得因本波回落（`suite-statusqueue-browser` 的既有红相是否转绿与本波次无关）。
 4. 实施者不得修改本波测试文件（以 §8.7 sha256 为准）；若断言与契约冲突，停下上报 Lead，**不得**为转绿放宽断言。
 5. 绿相自证时同样需要落 `tests/acceptance/artifacts/red-preview-policy*.log` 之外的独立绿相日志，并保持 `git status --porcelain tests/acceptance/artifacts` 只显示本波新增日志。
+
+---
+
+# 红相 #2（Wave 2026-11-06 增补轮）— 契约 amend R-4 / R-5 / R-6 + M-2 + Gate-1 ADVISORY ⑤
+
+- Owner: **test-agent**（独立验收方）；触发源：[review-plan.json](.dev-team/review-plan.json)（BLOCKING `SECURITY` 敏感路径 + `ADVISORY` 未注册 cwd 状态回退 / 客户端接线无断言）与 [review-l3b-preview.json](.dev-team/review-l3b-preview.json)（BLOCKING `SECURITY` `.credentials.yaml` 经 `/api/file` 出网 + `ADVISORY` mock 延迟计时器残留）
+- 契约 amend 口径（Protocol Agent 待落文；本轮按 Lead 裁决 2026-11-06 编写）：**R-4** 敏感路径 denylist → 403 `PREVIEW_SENSITIVE_PATH`；**R-5** 归属不可核验 → fail-closed `PREVIEW_POLICY_UNAVAILABLE`；**R-6** 未注册 cwd 一律 b 步越界文案（不得 404 存在性探针）；**M-2** mock 延迟计时器卫生；**Gate-1 ADVISORY ⑤** 客户端接线静态断言
+- 红相 #2 落盘时间: **2026-11-06T08:53+08:00**（本机 `node v22.21.0`，仓库根 `<repo>`）
+- 物理日志: [red-preview-policy-r4.log](tests/acceptance/artifacts/red-preview-policy-r4.log) · [red-preview-policy-at-r4.log](tests/acceptance/artifacts/red-preview-policy-at-r4.log)
+
+## 9.1 复现命令（只跑本波两套件；**刻意不跑 run-all**）
+
+```bash
+cd <repo>
+node tests/acceptance/suite-preview-policy.mjs                 # → exit 1（21 条）
+node tests/acceptance/adversarial/preview-policy-attack.mjs    # → exit 1（9 条）
+```
+
+> 自红相 #1 起 `run-all.mjs` 已登记两套件（commit 25d8af5）；`run-all` 会覆写其它波次的冻结 PNG，
+> 故本轮按 Lead 纪律**不跑全量**，`git status --porcelain tests/acceptance` 全程无 PNG 变更（见 §9.6）。
+
+## 9.2 新增用例（8 条：L2-T +4 组、L2-AT +1）
+
+| 套件 | 用例 | 契约条目 | 红相结果 |
+|:--|:--|:--|:--|
+| suite-preview-policy | A10a 越界敏感路径 denylist（`.credentials.yaml` / `cordis.patch.yml` / `settings.yaml` / `vertex.pem` / `aws.key` / `.env.yaml`） | R-4 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A10b 对照组：越界普通 `notes.md` 仍 200（denylist 不误杀） | R-4 | ✔ PASS（护栏） |
+| suite-preview-policy | A10c 工作区内快路径不受 denylist 影响：区内 `.credentials.yaml` = 200、区内 `.q20_token` = 415 | R-4 + `test-unit.mjs:2994-3008` 冻结断言 | ✔ PASS（护栏） |
+| suite-preview-policy | A10d 无 session 越界命中敏感文件 → 403 且体不含 code | R-4 / R-2 | ✔ PASS（护栏） |
+| suite-preview-policy | A11 `workingDirectory:'~/ws-x'`（不可 realpath）→ 403 `PREVIEW_POLICY_UNAVAILABLE` + `[PREVIEW]` warn | R-5 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A12 未注册 cwd + 目标不存在 → 403 越界文案（不得 404）；已注册 + 不存在 → 404 不变 | R-6 | ✖ FAIL（断言失败） |
+| suite-preview-policy | A13 客户端接线静态断言：`data-fpsid` ×2 + `&session=` 拼接 + 4 个 code→文案映射键 | Gate-1 ADVISORY ⑤ | ✖ FAIL（断言失败） |
+| adversarial | AT-4 DELAY=6000 触发超时后：不得残留未 clear/unref 的 mock 计时器 + 子进程真实退出码/退出墙钟受限 + 无未处理 rejection | M-2 | ✖ FAIL（断言失败） |
+
+**A6b 同步收紧（R-6 落地）**：原「未注册 cwd 响应体取 `workspace is not registered` / `path escapes…` 二者之一」的宽松断言，
+按 R-6（未注册 cwd 一律 b 步越界文案）收紧为**逐字节等于** `{"ok":false,"error":"path escapes the workspace root"}`；收紧后仍 PASS（实现已符合）。
+
+## 9.3 逐条红相证据（期望 vs 实际，原样摘自日志）
+
+| 用例 | 失败断言 | 期望 | 实际（物理事实） |
+|:--|:--|:--|:--|
+| A10a | 越界 `.credentials.yaml`（完全权限 + 同 cwd）→ status | `403` | `200`（当前实现无 denylist，凭据文件经 `/api/file` 出网） |
+| A11 | `workingDirectory='~/ws-x'` 归属不可核验 → status | `403` | `200`（`realpath('~/ws-x')` 失败 → `sessionCwd=''` → c 步整体跳过 → fail-open） |
+| A12 | 未注册 cwd + 不存在目标 → status | `403`（越界文案，无 `code`） | `404`（realpath 先于 registered 判定 → 任意绝对路径存在性可探测） |
+| A13 | 403 `code`→文案映射覆盖 §1.2 全部冻结码 | 缺失数 `0` | `1`（`static/index.html` 缺 `PREVIEW_SENSITIVE_PATH` 文案分支） |
+| AT-4 | 超时后 active `Timeout` 数不得增加 | `After ≤ Before (0)` | `Before=0 After=1`，`getActiveResourcesInfo()` 实测 `[…,"Timeout"]`（mock 延迟计时器未 clear/unref） |
+
+红相汇总：`suite-preview-policy` `total=21 pass=17 fail=4 degraded=0`（**exit 1**）·
+`preview-policy-attack` `total=9 pass=8 fail=1 degraded=0`（**exit 1**）。
+
+## 9.4 本轮已转绿的部分（不是缺陷，是实施已落地）
+
+- A1–A9（14 条）与 AT-1/AT-2/AT-3（8 条）在红相 #1 时为红，现已全绿：`decidePreviewReadAccess` 已实现、`/api/file` 已接 `session` 四态、`PROJECTIONS_FAIL/_DELAY_MS` 接缝已按 M-1 与生产同语义执行 `timeoutMs`（AT-1b 实测 `越界 403 in 2506ms; 区内 200 in 4ms`）。
+- 因此本轮红相**只针对新冻结的 R-4/R-5/R-6/M-2/Gate-1⑤**；这 5 条全部真实失败，未放宽任何旧断言。
+
+## 9.5 接缝方法学（为什么 M-2 需要进程内探针）
+
+1. `server.mjs:8156` 有「主模块守卫」：`process.argv[1] === __filename` 才 `listen`。故**不能**用 wrapper `import('server.mjs')` 起服务（实测：import 成功但 `/healthz` 不可达）。
+2. AT-4 因此用 `spawn(node, ['--import', <ipc-hook>, 'server.mjs'])` + `stdio[3]='ipc'`：`server.mjs` 仍是主模块（正常 listen），钩子在进程内应答 `resources` 请求。
+3. 判定语义（本机 node v22 实测）：`process.getActiveResourcesInfo()` **不列出**已 `clearTimeout` 或已 `unref` 的 setTimeout；因此「DELAY 触发超时前后 active `Timeout` 数 delta > 0」即残留计时器的物理证据（当前实现 delta=+1）。
+4. 该断言对两种合规修法都成立：`clearTimeout` 或 `unref` —— 二者在该快照里都不可见；故不偏向任何具体实现。
+5. 退出墙钟同样按真实 `'exit'` 事件计时（SIGTERM → exit，实测 5–8ms），无 sleep、无盲等；`SIGKILL` 兜底会直接判失败（`killedByForce`）。
+
+## 9.6 防假红 / 防污染核查
+
+1. `node --check` 三个文件全通过；两套件均正常输出 `SUITE-* SUMMARY`（非 exit 2，无 `MODULE_NOT_FOUND`/`SYNTAX`）。
+2. 5 条失败全部是**断言级**行为失败（`200 vs 403` / `404 vs 403` / 缺失文案键 / active Timeout delta），无导入失败、无执行异常逃逸、无 500。
+3. 隔离：每用例独立 mock 实例（临时 `DSH_HOME` + 临时工作区根），`stop()`/`cleanupHome()` 回收；AT-4 用独立 IPC 实例且只回收临时目录。
+4. 输出脱敏：`grep -cE '/hom[e]/[a-zA-Z0-9_.-]+/' tests/acceptance/artifacts/red-preview-policy*-r4.log` → `0 0`。
+5. **他人冻结产物零触碰**：本轮未跑 `run-all`；`git status --porcelain tests/acceptance` 仅显示本波 3 个改动文件 + 2 个新日志，`tests/acceptance/artifacts/*.png` 无任何 ` M `/`??` 行。
+6. 未改动实现与契约：`server.mjs` / `static/index.html` / `lib/preview-policy.mjs` / `.dev-team/contract-wave-2026-11-06.md` 均由 Executor/Protocol Agent 负责，本 Agent 只读。
+
+## 9.7 需 Lead 裁决的新增口径（A10a 断言顺序）
+
+- A10a 断言「denylist **先于**扩展名白名单」：`vertex.pem` / `aws.key` 在越界（非快路径）分支期望 **403 `PREVIEW_SENSITIVE_PATH`** 而非 415。
+- 依据：Lead 裁决 2026-11-06 的枚举明确要求这两条 → 403 SENSITIVE；且 R-4 的语义是「非快路径授权阶段先做敏感检查」。
+- 若 Protocol Agent 的 amend 文本把敏感检查放到 `servePreviewFile` 之后（即 pem/key 先 415），**请 Lead 回调本条断言**——本 Agent 不会自行放宽或改契约。
+
+## 9.8 冻结清单（sha256，Lead 复核后置只读）
+
+| 文件 | sha256 |
+|:--|:--|
+| `tests/acceptance/suite-preview-policy.mjs`（A1–A13，21 条） | `f270aed2a703a89b3a506f2c22c2fd6a5f3a449c08763e650502e50b424d111f` |
+| `tests/acceptance/adversarial/preview-policy-attack.mjs`（AT-1…AT-4，9 条） | `6f277ea20148c1e8cd68adfe71b96262cd6dc051a4de763fbd531e09b1c25f03` |
+| `tests/acceptance/lib/preview-host.mjs`（+IPC 探针 `launchPreviewHostWithIpc`） | `3e191703daa59b9888e724536f50810d8c36d961b1d4c6927e81b50759493c67` |
+| `tests/acceptance/run-all.mjs`（自红相 #1 起已登记，本轮未改） | `1fbab93f051a66535688b13dcfb84d71d4b9dbfbc84e58327927f924332782dd` |
+| `tests/acceptance/artifacts/red-preview-policy-r4.log` | `EXIT=1`（21/17/4） |
+| `tests/acceptance/artifacts/red-preview-policy-at-r4.log` | `EXIT=1`（9/8/1） |
+
+## 9.9 本波绿相判据（增补轮）
+
+1. `node tests/acceptance/suite-preview-policy.mjs` → **exit 0**（`total=21 pass=21`）。
+2. `node tests/acceptance/adversarial/preview-policy-attack.mjs` → **exit 0**（`total=9 pass=9`）。
+3. A10c 必须保持绿：工作区内 `.credentials.yaml` = 200、`.q20_token` = 415（denylist 仅非快路径；呼应 `test-unit.mjs:2994-3008`）。
+4. AT-4 绿相要求 mock 延迟计时器在超时分支 `clearTimeout` 或 `unref`，且 SIGTERM 后真实退出 ≤2000ms、总墙钟 ≤4000ms、无未处理 rejection。
+5. 实施者不得修改本波测试文件（以 §9.8 sha256 为准）；若断言与 amend 文本冲突，停下来由 Lead 裁决。

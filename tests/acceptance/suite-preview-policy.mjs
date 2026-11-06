@@ -4,7 +4,10 @@
  *
  * 契约唯一来源：.dev-team/contract-wave-2026-11-06.md
  *   §1.1 纯函数签名/字段（含 requestCwd）· §1.2 错误码表 · §1.3 /api/file 处理顺序
- *   §1.4 测试接缝（PROJECTIONS / _FAIL）· §2 决策顺序真值表 · §3 验收矩阵 A1–A9
+ *   §1.4 测试接缝（PROJECTIONS / _FAIL / _DELAY_MS）· §2 决策顺序真值表 · §3 验收矩阵 A1–A9
+ *   + 契约 amend R-4（敏感路径 denylist → PREVIEW_SENSITIVE_PATH）/ R-5（归属不可核验 fail-closed）
+ *   + R-6（未注册 cwd 一律 b 步越界文案）/ Gate-1 ADVISORY ⑤（客户端接线静态断言）
+ *   → 本套件 A1–A13
  *
  * 运行：node tests/acceptance/suite-preview-policy.mjs
  * 退出码：0=全绿；1=存在真实断言失败；3=显式 SKIP(DEGRADED)；2=套件启动失败
@@ -17,10 +20,11 @@
  *   4. 禁止 skip 冒充 PASS；禁止无断言用例。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { decidePreviewReadAccess, FULL_ACCESS_POLICY } from '../../lib/preview-policy.mjs';
 import {
-  ARTIFACT_DIR,
+  ARTIFACT_DIR, REPO_ROOT,
   assertEqual, assertFalse, assertOk, cleanupTempDirs, createRunner, fail, redact, tempDir,
 } from './lib/harness.mjs';
 import {
@@ -36,9 +40,8 @@ const projEnv = (obj) => ({ Q20_MOCK_HOST_PROJECTIONS: JSON.stringify(obj) });
 const FULL = FULL_ACCESS_POLICY;
 const WRITE = 'workspace-write';
 
-/** A6 向后兼容铁律的基线响应体（契约 §1.3 铁律：逐字节等价，不含 code）。 */
+/** A6 向后兼容铁律的基线响应体（契约 §1.3 铁律 / R-2 / R-6：逐字节等价，不含 code）。 */
 const LEGACY_ESCAPE_BODY = '{"ok":false,"error":"path escapes the workspace root"}';
-const LEGACY_UNREGISTERED_BODY = '{"ok":false,"error":"workspace is not registered"}';
 
 const writeFile = (dir, name, content) => {
   const p = path.join(dir, name);
@@ -233,8 +236,8 @@ async function main() {
     }
   });
 
-  // ── A6b 未注册工作区 ──
-  await runner.run('A6b 未注册工作区（无 session）：仍 403 且不泄漏路径', async () => {
+  // ── A6b 未注册工作区（R-6：未注册 cwd 一律走 b 步越界文案，不得保留 workspace is not registered）──
+  await runner.run('A6b 未注册工作区（无 session）：403 且响应体为 b 步越界文案（不含 code）', async () => {
     const { srv } = await openHost('a6b');
     try {
       const outsideDir = tempDir('q20-prev-out-a6b-');
@@ -242,13 +245,11 @@ async function main() {
       const unregistered = tempDir('q20-prev-unreg-a6b-');
       const res = await rawRequest(srv.base, fileUrl(unregistered, outsideFile));
       assertEqual(res.status, 403, 'A6b 未注册 cwd → status');
-      // 契约 §1.3 未把该分支的字面量固定下来：既可能保留既有 'workspace is not registered'，
-      // 也可能被统一成 b 步 'path escapes the workspace root'；两者都是 fail-closed，断言取集合。
-      assertOk(res.text === LEGACY_UNREGISTERED_BODY || res.text === LEGACY_ESCAPE_BODY,
-        'A6b 未注册工作区响应体必须为既有文案之一（不得新增放行路径）',
-        LEGACY_UNREGISTERED_BODY + ' 或 ' + LEGACY_ESCAPE_BODY, res.text);
+      // R-6（裁决）：未注册 cwd 的拒绝统一为 b 步越界文案，与「无 session 越界」逐字节等价。
+      assertEqual(res.text, LEGACY_ESCAPE_BODY,
+        'A6b 未注册 cwd → 响应体必须是 b 步越界文案（不得保留 workspace is not registered / 不得含 code）');
       assertNoLeak(res, [unregistered, outsideDir], 'A6b 未注册 403');
-      return '未注册 cwd 仍 403（' + (res.text === LEGACY_UNREGISTERED_BODY ? '既有文案' : 'b 步文案') + '）';
+      return '未注册 cwd → 403 ' + LEGACY_ESCAPE_BODY;
     } finally {
       await srv.stop();
     }
@@ -426,6 +427,186 @@ async function main() {
     } finally {
       await srv.stop();
     }
+  });
+
+  // ═══════════ A10 敏感路径 denylist（契约 amend R-4；仅非快路径生效）═══════════
+  // 冻结事实（Lead 裁决 2026-11-06）：denylist 只作用于 !(contained && registered) 的非快路径；
+  // 工作区内快路径行为与今天完全一致（test-unit.mjs:2994-3008 已冻结「工作区内 .q20_token = 415」）。
+  await runner.run('A10a 越界敏感路径 denylist（6 类凭据/配置文件）→ 403 PREVIEW_SENSITIVE_PATH 且无字节出网', async () => {
+    const sid = 'session-a10-full';
+    const { srv, cwd } = await openHost('a10a', ({ workspacePath }) => projEnv({
+      [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a10a') },
+    }));
+    try {
+      const outsideDir = tempDir('q20-a10-out-');
+      const x = path.join(outsideDir, 'x');
+      fs.mkdirSync(x, { recursive: true });
+      const sensitive = [
+        ['.credentials.yaml', path.join(x, '.credentials.yaml'), 'A10A-CREDENTIALS-MARKER'],
+        ['cordis.patch.yml', path.join(x, 'cordis.patch.yml'), 'A10A-CORDIS-MARKER'],
+        ['settings.yaml', path.join(x, 'settings.yaml'), 'A10A-SETTINGS-MARKER'],
+        ['vertex.pem', path.join(x, 'vertex.pem'), 'A10A-VERTEXPEM-MARKER'],
+        ['aws.key', path.join(x, 'aws.key'), 'A10A-AWSKEY-MARKER'],
+        ['.env.yaml', path.join(x, '.env.yaml'), 'A10A-ENVYAML-MARKER'],
+      ];
+      for (const [label, file, marker] of sensitive) {
+        fs.writeFileSync(file, marker + '\n');
+      }
+      const observed = [];
+      for (const [label, file, marker] of sensitive) {
+        const res = await rawRequest(srv.base, fileUrlSession(cwd, file, sid));
+        assertEqual(res.status, 403, 'A10a 越界敏感文件 ' + label + ' → status');
+        assertEqual(res.json && res.json.code, 'PREVIEW_SENSITIVE_PATH',
+          'A10a 越界敏感文件 ' + label + ' → code（denylist 先于扩展名白名单，403 不得退化为 415）');
+        assertEqual(res.json && res.json.error, 'preview of sensitive files is not allowed',
+          'A10a 越界敏感文件 ' + label + ' → error 原文');
+        assertEqual(res.headers['content-type'], 'application/json; charset=utf-8',
+          'A10a 越界敏感文件 ' + label + ' → 必须是 JSON 拒绝，不是文件流');
+        assertNoLeak(res, [marker, outsideDir], 'A10a ' + label);
+        observed.push(label + '=403');
+      }
+      return observed.join(', ');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  await runner.run('A10b 对照组：越界普通 notes.md 仍 200（denylist 不得误杀）；越界普通 .bin 仍 415（见 A9.4）', async () => {
+    const sid = 'session-a10b-full';
+    const { srv, cwd } = await openHost('a10b', ({ workspacePath }) => projEnv({
+      [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a10b') },
+    }));
+    try {
+      const outsideDir = tempDir('q20-a10b-out-');
+      const x = path.join(outsideDir, 'x');
+      fs.mkdirSync(x, { recursive: true });
+      // 与敏感文件同目录、同层级，只有文件名不同 → 证明拒绝依据是 denylist 而非目录
+      writeFile(x, '.credentials.yaml', 'A10B-CRED-MARKER\n');
+      const content = 'A10B-NOTES-OK\n';
+      const notes = writeFile(x, 'notes.md', content);
+      const res = await rawRequest(srv.base, fileUrlSession(cwd, notes, sid));
+      assertEqual(res.status, 200, 'A10b 越界普通 notes.md（完全权限 + 同 cwd）→ status');
+      assertEqual(res.text, content, 'A10b notes.md 内容必须逐字节一致');
+      return 'notes.md=200 (' + res.text.length + 'B)；同目录 .credentials.yaml 仍 403（见 A10a）';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  await runner.run('A10c 工作区内快路径不受 denylist 影响：区内 .credentials.yaml 仍 200；区内 .q20_token 仍 415', async () => {
+    const { srv, cwd } = await openHost('a10c');
+    try {
+      const credContent = 'A10C-INSIDE-CREDENTIALS\n';
+      const insideCred = writeFile(cwd, '.credentials.yaml', credContent);
+      const insideToken = writeFile(cwd, '.q20_token', 'q20-inside-token-abc\n');
+
+      const cred = await rawRequest(srv.base, fileUrl(cwd, insideCred));
+      assertEqual(cred.status, 200,
+        'A10c 工作区内 .credentials.yaml → status（快路径与今天完全一致，denylist 不得介入）');
+      assertEqual(cred.text, credContent, 'A10c 工作区内 .credentials.yaml 内容逐字节一致');
+
+      const token = await rawRequest(srv.base, fileUrl(cwd, insideToken));
+      assertEqual(token.status, 415,
+        'A10c 工作区内 .q20_token（无白名单扩展名）→ status（与 test-unit.mjs:2994-3008 冻结断言一致）');
+      assertEqual(token.json && token.json.error, 'unsupported preview type', 'A10c .q20_token → error 原文');
+      return 'inside .credentials.yaml=200; inside .q20_token=415';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  await runner.run('A10d 无 session 越界命中敏感文件 → 403 且响应体不含 code（R-2 一致）', async () => {
+    const { srv, cwd } = await openHost('a10d');
+    try {
+      const outsideDir = tempDir('q20-a10d-out-');
+      const secret = writeFile(outsideDir, '.credentials.yaml', 'A10D-CRED-MARKER\n');
+      const res = await rawRequest(srv.base, fileUrl(cwd, secret));
+      assertEqual(res.status, 403, 'A10d 无 session 越界敏感文件 → status');
+      assertEqual(res.json && res.json.code, undefined,
+        'A10d 无 session 的拒绝体不得出现 code 字段（R-2 逐字节等价铁律）');
+      assertOk(res.json && (res.json.error === 'path escapes the workspace root'
+        || res.json.error === 'preview of sensitive files is not allowed'),
+      'A10d 无 session 越界敏感文件 → error 必须是 §1.2 冻结文案之一',
+      'path escapes the workspace root 或 preview of sensitive files is not allowed', res.json && res.json.error);
+      assertNoLeak(res, ['A10D-CRED-MARKER', outsideDir], 'A10d');
+      return '403 无 code（error=' + (res.json && res.json.error) + '）';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  // ═══════════ A11 归属不可核验 fail-closed（契约 amend R-5）═══════════
+  await runner.run('A11 workingDirectory 不可核验（~/ws-x 非绝对/不可 realpath）→ 403 PREVIEW_POLICY_UNAVAILABLE + [PREVIEW] warn', async () => {
+    const sid = 'session-a11-unknown-cwd';
+    const { srv, cwd } = await openHost('a11', projEnv({
+      [sid]: { permissions: { currentValue: FULL }, workingDirectory: '~/ws-x' },
+    }));
+    try {
+      const outsideDir = tempDir('q20-a11-out-');
+      const outsideFile = writeFile(outsideDir, 'a11-notes.md', 'A11-SECRET-BYTES\n');
+      const res = await rawRequest(srv.base, fileUrlSession(cwd, outsideFile, sid));
+      assertEqual(res.status, 403,
+        'A11 归属不可核验必须 fail-closed（不得因 realpath 失败把 sessionCwd 置空后跳过 c 步而放行）');
+      assertEqual(res.json && res.json.code, 'PREVIEW_POLICY_UNAVAILABLE', 'A11 → code');
+      assertEqual(res.json && res.json.error, 'session permission is unavailable', 'A11 → error 原文');
+      assertNoLeak(res, [outsideDir, 'A11-SECRET-BYTES'], 'A11');
+      const log = await waitForLog(srv, new RegExp('\\[PREVIEW\\][^\\n]*sid=' + sid));
+      assertOk(!!log, 'A11 归属不可核验必须落可审计 warn（[PREVIEW] 前缀 + sid=' + sid + '，可附 reason）',
+        '[PREVIEW] ... sid=' + sid, 'stderr 未见（末段: ' + redact((srv.stderrText || '').slice(-400)) + '）');
+      return '403 PREVIEW_POLICY_UNAVAILABLE; warn 命中 sid';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  // ═══════════ A12 未注册 cwd 状态语义（契约 amend R-6）═══════════
+  await runner.run('A12 未注册 cwd + 目标不存在 → 403 越界文案（不得 404 存在性探针）；已注册 + 目标不存在 → 404 不变', async () => {
+    const { srv, cwd } = await openHost('a12');
+    try {
+      const unregistered = os.tmpdir();
+      const nope = path.join(unregistered, 'q20-nope-' + process.pid + '-' + Date.now() + '.md');
+      assertFalse(fs.existsSync(nope), 'A12 前置：探测目标必须不存在');
+      const probe = await rawRequest(srv.base, fileUrl(unregistered, nope));
+      assertEqual(probe.status, 403,
+        'A12 未注册 cwd + 不存在目标 → 必须 403（不得用 404 暴露任意绝对路径存在性）');
+      assertEqual(probe.text, LEGACY_ESCAPE_BODY,
+        'A12 未注册 cwd → 响应体必须是 b 步越界文案（不含 code）');
+      assertNoLeak(probe, [unregistered], 'A12 未注册 cwd');
+
+      const registeredMissing = await rawRequest(srv.base, fileUrl(cwd, path.join(cwd, 'a12-missing.md')));
+      assertEqual(registeredMissing.status, 404, 'A12 已注册 cwd + 目标不存在 → status 必须仍是 404');
+      assertEqual(registeredMissing.json && registeredMissing.json.error, 'preview file not found',
+        'A12 已注册 cwd + 目标不存在 → error 原文不变');
+      return '未注册+不存在=403 越界文案; 已注册+不存在=404 preview file not found';
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  // ═══════════ A13 客户端接线静态断言（Gate-1 ADVISORY ⑤，防「客户端漏接仍全绿」）═══════════
+  await runner.run('A13 客户端接线静态断言：data-fpsid ×2 + &session= 拼接 + 403 code→文案映射（含 PREVIEW_SENSITIVE_PATH）', async () => {
+    const file = path.join(REPO_ROOT, 'static', 'index.html');
+    assertOk(fs.existsSync(file), 'A13 static/index.html 必须存在', redact(file), '(missing)');
+    const html = fs.readFileSync(file, 'utf8');
+
+    const fpsidCount = (html.match(/data-fpsid/g) || []).length;
+    assertOk(fpsidCount >= 2,
+      'A13 交付卡片与 fpChipHtml 必须都写 data-fpsid（会话 id 真源）', '≥2 处 data-fpsid', fpsidCount + ' 处');
+
+    assertOk(/&session='\s*\+\s*encodeURIComponent\(/.test(html),
+      'A13 fpBuildTarget 必须把会话 id 拼进 /api/file 的 &session= 参数',
+      "&session=' + encodeURIComponent(<sid>)", '(未匹配)');
+
+    const codeKeys = [
+      'PREVIEW_PERMISSION_REQUIRED',
+      'PREVIEW_SESSION_MISMATCH',
+      'PREVIEW_POLICY_UNAVAILABLE',
+      'PREVIEW_SENSITIVE_PATH',
+    ];
+    const missing = codeKeys.filter((k) => html.indexOf(k) === -1);
+    assertEqual(missing.length, 0,
+      'A13 403 响应 code→文案映射必须覆盖 §1.2 全部冻结码（缺失: ' + (missing.join(',') || '无') + '）');
+    return 'data-fpsid=' + fpsidCount + ' 处; &session= 拼接命中; code 映射 ' + codeKeys.length + '/' + codeKeys.length;
   });
 
   const { failCount, degradedCount } = runner.report();

@@ -136,6 +136,35 @@ export async function launchPreviewHost(opts = {}) {
           try { child.kill('SIGKILL'); } catch { /* 已退出 */ }
           try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* 尽力而为 */ }
         },
+        /**
+         * M-2（mock 定时器卫生）专用：发 SIGTERM 后以子进程真实 'exit' 事件计时，
+         * 不 sleep、不盲等；超时仍未退出则 SIGKILL 并返回 killedByForce=true。
+         * @returns {Promise<{ code:number|null, signal:string|null, ms:number, killedByForce:boolean }>}
+         */
+        sendSigtermAndWaitExit(timeoutMs = 5000) {
+          return new Promise((resolve) => {
+            const t0 = performance.now();
+            let settled = false;
+            const finish = (code, signal, killedByForce) => {
+              if (settled) return;
+              settled = true;
+              resolve({ code, signal, ms: performance.now() - t0, killedByForce });
+            };
+            child.once('exit', (code, signal) => finish(code, signal, false));
+            try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
+            setTimeout(() => {
+              if (settled) return;
+              try { child.kill('SIGKILL'); } catch { /* noop */ }
+              finish(null, 'SIGKILL', true);
+            }, timeoutMs).unref();
+          });
+        },
+        /** 仅回收临时目录（配合 sendSigtermAndWaitExit 使用，避免二次 kill 干扰计时）。 */
+        cleanupHome() {
+          try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* 尽力而为 */ }
+        },
+        /** 子进程句柄（仅 M-2 计时用例使用；常规用例请用 stop()）。 */
+        child,
       };
     }
     await new Promise((r) => setTimeout(r, 150));
@@ -218,4 +247,134 @@ export async function waitForLog(server, re, timeoutMs = 5000) {
 /** 取 mock RPC 收据里某 method 的条数。 */
 export function countRpcMethod(server, method) {
   return server.rpcEntries().filter((e) => e && e.method === method).length;
+}
+
+/**
+ * M-2（mock 定时器卫生）专用探针：以 `spawn` + `--import` 钩子 + IPC 拉起同一台 mock 实例。
+ *
+ * 为什么不能直接 import：`server.mjs:8156` 有「主模块守卫」（`process.argv[1] === __filename`
+ * 才 `listen`），被 import 时不会起服务；因此本探针用 `--import <hook> server.mjs` 保持
+ * `server.mjs` 仍是主模块，同时在进程内预装 IPC 应答钩子。
+ *
+ * 判定依据（实测 node v22）：`process.getActiveResourcesInfo()` 不列出已 clear 或已 unref 的
+ * setTimeout；故「注入 DELAY 触发超时 → 活动 Timeout 数增加」就是残留计时器的物理证据。
+ *
+ * @returns {Promise<{ base, home, workspaceRoot, workspacePath, stderrText, requestResources, sendSigtermAndWaitExit, cleanupHome, stop, child }>}
+ */
+export async function launchPreviewHostWithIpc(opts = {}) {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'q20-prev-ipc-')));
+  const workspaceRoot = path.join(home, 'workspaces');
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  const dshHome = path.join(home, 'dsh-home');
+  const port = await freePort();
+  const base = 'http://127.0.0.1:' + port;
+
+  const hook = path.join(home, 'ipc-hook.mjs');
+  fs.writeFileSync(hook, [
+    "process.on('message', (msg) => {",
+    "  if (!msg || typeof msg !== 'object') return;",
+    "  if (msg.type === 'resources') {",
+    '    let list = [];',
+    '    try { list = process.getActiveResourcesInfo(); } catch { list = []; }',
+    "    try { process.send({ type: 'resources', id: msg.id, list }); } catch { /* 父进程已退出 */ }",
+    '    return;',
+    '  }',
+    "  if (msg.type === 'shutdown') { process.exit(0); }",
+    '});',
+    '',
+  ].join('\n'));
+
+  const ctx = { home, workspaceRoot, workspacePath: (n) => path.join(workspaceRoot, n) };
+  const seamEnv = (typeof opts.env === 'function') ? (opts.env(ctx) || {}) : (opts.env || {});
+  const child = spawn(process.execPath, ['--import', hook, 'server.mjs'], {
+    cwd: REPO_ROOT,
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    env: {
+      ...inheritedEnv(),
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      DSH_HOME: dshHome,
+      DSH_WEB_URL: 'http://127.0.0.1:3080',
+      Q20_MOCK_HOST: '1',
+      Q20_MOCK_HOME: workspaceRoot,
+      ...seamEnv,
+    },
+  });
+  let stderrText = '';
+  const cap = (prev, chunk) => {
+    const next = prev + chunk.toString();
+    return next.length > 64000 ? next.slice(-64000) : next;
+  };
+  if (child.stdout) child.stdout.on('data', (d) => { stderrText = cap(stderrText, d); });
+  if (child.stderr) child.stderr.on('data', (d) => { stderrText = cap(stderrText, d); });
+
+  const replies = new Map();
+  let nextId = 1;
+  child.on('message', (msg) => {
+    if (msg && msg.type === 'resources' && replies.has(msg.id)) {
+      const done = replies.get(msg.id);
+      replies.delete(msg.id);
+      done(msg.list);
+    }
+  });
+
+  const sendSigtermAndWaitExit = (timeoutMs = 5000) => new Promise((resolve) => {
+    const t0 = performance.now();
+    let settled = false;
+    const finish = (code, signal, killedByForce) => {
+      if (settled) return;
+      settled = true;
+      resolve({ code, signal, ms: performance.now() - t0, killedByForce });
+    };
+    child.once('exit', (code, signal) => finish(code, signal, false));
+    try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
+    setTimeout(() => {
+      if (settled) return;
+      try { child.kill('SIGKILL'); } catch { /* noop */ }
+      finish(null, 'SIGKILL', true);
+    }, timeoutMs).unref();
+  });
+
+  const cleanupHome = () => {
+    try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* 尽力而为 */ }
+  };
+
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (await health(base)) {
+      return {
+        base,
+        home,
+        dshHome,
+        workspaceRoot,
+        get stderrText() { return stderrText; },
+        workspacePath: ctx.workspacePath,
+        /** 子进程实时活动资源快照（含 'Timeout' 计数），用于 M-2 计时器卫生判定。 */
+        requestResources(timeoutMs = 3000) {
+          const id = nextId++;
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              replies.delete(id);
+              reject(new Error('IPC resources 请求超时 (' + timeoutMs + 'ms)'));
+            }, timeoutMs);
+            replies.set(id, (list) => { clearTimeout(timer); resolve(list); });
+            try { child.send({ type: 'resources', id }); } catch (err) { clearTimeout(timer); reject(err); }
+          });
+        },
+        sendSigtermAndWaitExit,
+        cleanupHome,
+        async stop() {
+          try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
+          await new Promise((r) => setTimeout(r, 150));
+          try { child.kill('SIGKILL'); } catch { /* 已退出 */ }
+          cleanupHome();
+        },
+        child,
+      };
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  try { child.kill('SIGKILL'); } catch { /* noop */ }
+  cleanupHome();
+  throw new Error('preview mock host (ipc) failed to start: ' + (stderrText.slice(-1500) || '(no stderr)'));
 }
