@@ -281,14 +281,16 @@ async function main() {
   // ── A8 完全权限会话放行越界白名单文件 ──
   await runner.run('A8 完全权限会话（danger-full-access + 同 cwd）放行越界白名单文件：200 + Content-Type + 内容一致', async () => {
     const sid = 'session-a8-full';
-    const { srv, cwd } = await openHost('a8', ({ workspacePath }) => projEnv({
-      [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a8') },
+    const shared = 'PREVIEW-POLICY-A8-SHARED-BYTES\n';
+    const outsideDir = tempDir('q20-prev-out-a8-');
+    const outsideFile = writeFile(outsideDir, 'a8-outside.md', shared);
+    const { srv, cwd } = await openHost('a8', ({ workspacePath }) => ({
+      ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a8') } }),
+      // R-8 迁移（契约演进，非放宽）：越界读取必须命中本会话交付物清单。
+      Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sid]: [outsideFile] }),
     }), { rpcLog: true });
     try {
-      const shared = 'PREVIEW-POLICY-A8-SHARED-BYTES\n';
       const insideFile = writeFile(cwd, 'a8-inside.md', shared);
-      const outsideDir = tempDir('q20-prev-out-a8-');
-      const outsideFile = writeFile(outsideDir, 'a8-outside.md', shared);
 
       const ins = await rawRequest(srv.base, fileUrl(cwd, insideFile));
       assertEqual(ins.status, 200, 'A8 前置：工作区内同一内容文件必须 200');
@@ -410,15 +412,16 @@ async function main() {
 
   await runner.run('A9.4 完全权限放行后：非白名单扩展名仍 415、>2MB 文本仍 413（策略不放宽上限）', async () => {
     const sid = 'session-a9-4full';
-    const { srv, cwd } = await openHost('a9-4', ({ workspacePath }) => projEnv({
-      [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a9-4') },
+    const outsideDir = tempDir('q20-prev-out-a94-');
+    const binFile = writeFile(outsideDir, 'a9-4-payload.bin', 'BINARY-ISH-BYTES\n');
+    const bigMarker = 'Q20-BIG-TEXT-MARKER';
+    const bigFile = writeFile(outsideDir, 'a9-4-big.md', bigMarker + 'X'.repeat(2 * 1024 * 1024 + 1024));
+    const { srv, cwd } = await openHost('a9-4', ({ workspacePath }) => ({
+      ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a9-4') } }),
+      // R-8 迁移：两个越界文件都列入清单，使判定走到 servePreviewFile，验证 415/413 不被完全权限放宽。
+      Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sid]: [binFile, bigFile] }),
     }));
     try {
-      const outsideDir = tempDir('q20-prev-out-a94-');
-      const binFile = writeFile(outsideDir, 'a9-4-payload.bin', 'BINARY-ISH-BYTES\n');
-      const bigMarker = 'Q20-BIG-TEXT-MARKER';
-      const bigFile = writeFile(outsideDir, 'a9-4-big.md', bigMarker + 'X'.repeat(2 * 1024 * 1024 + 1024));
-
       const bin = await rawRequest(srv.base, fileUrlSession(cwd, binFile, sid));
       assertEqual(bin.status, 415, 'A9.4 非白名单扩展名（.bin）在完全权限下 → status');
       assertEqual(bin.json && bin.json.error, 'unsupported preview type', 'A9.4 415 → error 原文');
@@ -479,17 +482,19 @@ async function main() {
 
   await runner.run('A10b 对照组：越界普通 notes.md 仍 200（denylist 不得误杀）；越界普通 .bin 仍 415（见 A9.4）', async () => {
     const sid = 'session-a10b-full';
-    const { srv, cwd } = await openHost('a10b', ({ workspacePath }) => projEnv({
-      [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a10b') },
+    const outsideDir = tempDir('q20-a10b-out-');
+    const x = path.join(outsideDir, 'x');
+    fs.mkdirSync(x, { recursive: true });
+    // 与敏感文件同目录、同层级，只有文件名不同 → 证明拒绝依据是 denylist 而非目录
+    writeFile(x, '.credentials.yaml', 'A10B-CRED-MARKER\n');
+    const content = 'A10B-NOTES-OK\n';
+    const notes = writeFile(x, 'notes.md', content);
+    const { srv, cwd } = await openHost('a10b', ({ workspacePath }) => ({
+      ...projEnv({ [sid]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-a10b') } }),
+      // R-8 迁移：对照组 notes.md 必须列入交付物清单（否则撞成员闸门而非验证「denylist 不误杀」）。
+      Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sid]: [notes] }),
     }));
     try {
-      const outsideDir = tempDir('q20-a10b-out-');
-      const x = path.join(outsideDir, 'x');
-      fs.mkdirSync(x, { recursive: true });
-      // 与敏感文件同目录、同层级，只有文件名不同 → 证明拒绝依据是 denylist 而非目录
-      writeFile(x, '.credentials.yaml', 'A10B-CRED-MARKER\n');
-      const content = 'A10B-NOTES-OK\n';
-      const notes = writeFile(x, 'notes.md', content);
       const res = await rawRequest(srv.base, fileUrlSession(cwd, notes, sid));
       assertEqual(res.status, 200, 'A10b 越界普通 notes.md（完全权限 + 同 cwd）→ status');
       assertEqual(res.text, content, 'A10b notes.md 内容必须逐字节一致');

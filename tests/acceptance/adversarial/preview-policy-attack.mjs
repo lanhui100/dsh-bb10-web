@@ -334,13 +334,18 @@ async function main() {
     const sidFull = 'session-at3-full';
     const sidWrite = 'session-at3-write';
     const shared = 'AT3-SHARED-TARGET-BYTES\n';
-    const { srv, cwd } = await openHost('at3', ({ workspacePath }) => projEnv({
-      [sidFull]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-at3') },
-      [sidWrite]: { permissions: { currentValue: WRITE }, workingDirectory: workspacePath('ws-at3') },
+    const outsideDir = tempDir('q20-at3-out-');
+    const outsideFile = writeFile(outsideDir, 'at3-target.md', shared);
+    const { srv, cwd } = await openHost('at3', ({ workspacePath }) => ({
+      ...projEnv({
+        [sidFull]: { permissions: { currentValue: FULL }, workingDirectory: workspacePath('ws-at3') },
+        [sidWrite]: { permissions: { currentValue: WRITE }, workingDirectory: workspacePath('ws-at3') },
+      }),
+      // R-8 迁移：两个 sid 都要列出该文件 —— 否则 sid-write 会先撞成员闸门得到
+      // PREVIEW_NOT_IN_DELIVERABLES，而非本用例要保留的原意图「权限闸门优先于成员闸门」。
+      Q20_MOCK_HOST_SESSION_DELIVERABLES: JSON.stringify({ [sidFull]: [outsideFile], [sidWrite]: [outsideFile] }),
     }));
     try {
-      const outsideDir = tempDir('q20-at3-out-');
-      const outsideFile = writeFile(outsideDir, 'at3-target.md', shared);
       const fullUrl = fileUrlSession(cwd, outsideFile, sidFull);
       const writeUrl = fileUrlSession(cwd, outsideFile, sidWrite);
 

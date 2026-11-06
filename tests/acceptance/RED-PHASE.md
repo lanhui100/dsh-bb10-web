@@ -647,3 +647,56 @@ node tests/acceptance/adversarial/preview-policy-attack.mjs    # → exit 1（12
 3. 成员闸门绿相要求：清单内/相对清单项 200；清单外 403 `PREVIEW_NOT_IN_DELIVERABLES`；清单缺失或为空一律 403；工作区内快路径不受影响（`.q20_token`=415 仍由 `test-unit.mjs` 兜底）；同一进程缓存不得让清单外文件借缓存 200。
 4. R-9 绿相要求：合法 session + 未注册 cwd + 目标不存在 → 403（不得 404）；已注册 + 不存在 → 404 不变。
 5. 实施者不得修改本波测试文件（以 §10.8 sha256 为准）；若断言与 amend 文本冲突，停下由 Lead 裁决。
+
+---
+
+# §11 契约演进迁移记录（Wave 2026-11-06 第 5 轮）— R-8 口径变更后的用例迁移
+
+- Owner: **test-agent**（独立验收方）；裁决来源：Lead 2026-11-06「契约演进门禁，Test 侧迁移；**不是放宽断言**」
+- 变更：契约 R-8 把越界读取口径由「完全权限 ⇒ 任意越界白名单文件可读」改为「**越界读取必须命中本会话交付物清单**」。
+- 结论：轮次 1/2 冻结的 **A8 / A9.4 / A10b / AT-3** 属旧口径用例，需按新契约迁移——**只补 env 接缝，零断言改动**。
+
+## 11.1 迁移清单（4 条，仅新增 `Q20_MOCK_HOST_SESSION_DELIVERABLES` 接缝）
+
+| 用例 | 迁移内容（只加 env） | 保留的原意（断言阈值一字未改） |
+|:--|:--|:--|
+| A8 | 接缝 `{"session-a8-full":[<outsideFile>]}`（越界文件在清单内） | 完全权限 + 同 cwd + 成员命中 → `200` + `Content-Type: text/plain; charset=utf-8` + 内容逐字节一致 + 与区内读取 Buffer 相同 + `session/projections` RPC ≥1 |
+| A9.4 | 接缝 `{"session-a9-4full":[<binFile>, <bigFile>]}` | 两个越界文件都进清单后才走到 `servePreviewFile`：`.bin` 仍 **415** `unsupported preview type`、>2MB `.md` 仍 **413** + `maxBytes=2097152`（完全权限**不得**放宽上限） |
+| A10b | 接缝 `{"session-a10b-full":[<notes>]}` | 对照组 `notes.md` 越界仍 **200**（denylist 不误杀普通文件）；同目录 `.credentials.yaml` 仍 403（A10a） |
+| AT-3 | 接缝 `{[sidFull]:[<outsideFile>], [sidWrite]:[<outsideFile>]}` | `sid-full` 恒 200（内容一致）/ `sid-write` 恒 **403 `PREVIEW_PERMISSION_REQUIRED`** —— **两个 sid 都必须列清单**，否则 sid-write 会先撞成员闸门得到 `PREVIEW_NOT_IN_DELIVERABLES`，正是要保留的「权限闸门优先于成员闸门」原意 |
+
+实现细节：4 条用例的「越界目标文件」由用例内构造，故**创建时机提前到 `openHost()` 之前**（接缝必须在 spawn 前注入），
+`tempDir()` 生命周期仍由 `cleanupTempDirs()` 统一回收；除此之外用例结构、断言顺序、失败文案全部未改。
+
+## 11.2 新用例在实现前为真红的证据（未被迁移削弱）
+
+| 证据 | 内容 |
+|:--|:--|
+| [red-preview-policy-r8.log](tests/acceptance/artifacts/red-preview-policy-r8.log) | `total=27 pass=24 fail=3`，`EXIT=1`：A14b 清单外 200（应 403）、A15 未注册+不存在 404（应 403）、A13 缺 `PREVIEW_NOT_IN_DELIVERABLES` 映射键 |
+| [red-preview-policy-at-r8.log](tests/acceptance/artifacts/red-preview-policy-at-r8.log) | `total=12 pass=9 fail=3`，`EXIT=1`：AT-5a 清单缺失 200（应 403）、AT-5b 清单外高危 200（应 403）、AT-5c 20 轮 × 4 并发逐轮清单外 200 出网 |
+
+即：成员闸门在实现落地**之前**已被 A14/AT-5 判红；本轮迁移只让 4 条旧口径用例适配新契约，**不涉及任何红相的撤回**。
+
+## 11.3 迁移后绿相（物理收据）
+
+| 套件 | 计数 | 退出码 | 日志 |
+|:--|:--|:--|:--|
+| `suite-preview-policy.mjs`（A1–A15） | `total=27 pass=27 fail=0 degraded=0` | **0** | [green-preview-policy-r8.log](tests/acceptance/artifacts/green-preview-policy-r8.log) |
+| `adversarial/preview-policy-attack.mjs`（AT-1…AT-5） | `total=12 pass=12 fail=0 degraded=0` | **0** | [green-preview-policy-at-r8.log](tests/acceptance/artifacts/green-preview-policy-at-r8.log) |
+
+## 11.4 纪律核查
+
+1. **只加接缝、不改断言**：4 条用例的 status / Content-Type / 内容 / `code` / `error` / `maxBytes` / 轮次数 / 墙钟阈值全部保持迁移前字面量；无任何断言被删除或放宽。
+2. **未顺带修改其它用例**：A1–A7、A9.1–A9.3、A10a、A10c、A10d、A11–A15、AT-1/AT-2/AT-4/AT-5 的用例体未改（`git diff` 仅为本轮 4 处接缝迁移 + §11 文档）。
+3. **不改实现/契约**：`server.mjs` / `static/index.html` / `lib/preview-policy.mjs` / `.dev-team/contract-wave-2026-11-06.md` 全程只读。
+4. **不跑全量 run-all**；`git status --porcelain tests/acceptance/artifacts/*.png | wc -l` = `0`（他人冻结 PNG 零触碰）。
+5. 输出脱敏：`grep -cE '/hom[e]/[a-zA-Z0-9_.-]+/' tests/acceptance/artifacts/green-preview-policy*-r8.log` → `0 0`。
+
+## 11.5 冻结清单更新（sha256）
+
+| 文件 | sha256 |
+|:--|:--|
+| `tests/acceptance/suite-preview-policy.mjs`（A1–A15，27 条，含 4 条 R-8 迁移） | `efbe9e008f12c6372c655a6e4400aca6c896cc2c96dfbba8f32780441ed43990` |
+| `tests/acceptance/adversarial/preview-policy-attack.mjs`（AT-1…AT-5，12 条，含 AT-3 迁移） | `ad618af3d40de7d5dea2df2daaafb1a0538e1c1632065f73af3d05513e68164d` |
+| `tests/acceptance/lib/preview-host.mjs`（本轮未改） | `3e191703daa59b9888e724536f50810d8c36d961b1d4c6927e81b50759493c67` |
+| `tests/acceptance/run-all.mjs`（本轮未改） | `1fbab93f051a66535688b13dcfb84d71d4b9dbfbc84e58327927f924332782dd` |
