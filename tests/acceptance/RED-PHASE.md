@@ -757,3 +757,36 @@ node tests/acceptance/adversarial/preview-policy-attack.mjs    # → exit 1（12
 2. A14f 绿相 = 场景① 403（`PREVIEW_NOT_IN_DELIVERABLES` 或 `PREVIEW_POLICY_UNAVAILABLE`，且响应体不含文件字节）+ 场景② 200（内容一致）。
 3. 修复方向（供实现侧参考，不属本 Agent 写域）：相对清单项只在 `sessionCwd` 非空时用 `resolve(sessionCwd, entry)` 归一；
    `sessionCwd` 为空时**不得**回退到 `requestCwd` —— 该会话视为「无法核验成员身份」→ fail-closed。
+
+---
+
+## 13. backlog:B023 — O 状态面板 Goal 动作（2026-11-13/14，L2-T）
+
+- Owner: **test-agent**（独立验收方，冻结件；Executor 只读）；Lead 统一补跑红相、锚定提交与绿相收口。
+- 唯一契约来源: [2026-11-13-ctrl-o-goal-actions.md](../.agents/notes/implemented/feature/2026-11-13-ctrl-o-goal-actions.md) §Decision。
+- 红相锚定提交: `584f1d0` `test(wave-1-goal-actions): freeze B023 ADR and red-phase acceptance tests`。
+- 红相命令：`node tests/acceptance/goal-actions.mjs` → **exit 1**，`total=13 pass=0 fail=13`（POST 端点不存在 405 + 静态锚点缺失，无吞异常、无导入/语法错误）。
+- 绿相命令：`node tests/acceptance/goal-actions.mjs` → **exit 0**，`total=13 pass=13 fail=0`。
+
+| 文件 | sha256 / 状态 |
+|:--|:--|
+| `tests/acceptance/goal-actions.mjs`（13 例，冻结只读） | `85cb9df135bcf0a19415a9e874dbdf76e48fcbe3ed6d18e952588744a76d4478` |
+| `tests/acceptance/artifacts/red-goal-actions.log` | `d43620fea521696cd7d1120f326ddde3418fd23008e530ab1d1a1f1c2130262c`（`EXIT=1`） |
+| `tests/acceptance/artifacts/green-goal-actions.log` | `485fcc02d3575839f5d37f57d69f4d646fe323951bb82085bb8edeeac5c4611a`（`EXIT=0`） |
+| `docs/release/evidence/b023-goal-actions/o-panel-actions.png` | `4b7e0dbfb4c299cd3b533889bc6e14c26d310a0cb7bea83945029874056cb391` |
+| `docs/release/evidence/b023-goal-actions/o-panel-final.png` | `fedd7ff66f2d8a28efe46c87f8951a502fc9125ff770aaf4992bc2553b4884fe` |
+
+### 13.1 浏览器 E2E 物理收据（agent-browser，隔离 mock 实例）
+
+- 环境：`Q20_MOCK_HOST=1` + `Q20_MOCK_HOST_GOAL`（临时 DSH_HOME/工作区根，零真实宿主/零 LLM），隔离端口 `127.0.0.1:41105`，`/healthz` 200。
+- 核心旅程：裸 `O` 打开会话状态面板 → `E` 行内编辑保存 → `G` 继续（phase 变「进行中」）→ `D` 打开删除确认 → `X` 取消（GET goal 仍存在、revision 未变）→ `D` + `Enter` 确认删除（面板「无」、GET goal `null`）。
+- 硬断言：浏览器 Console Error = **0**；关键完成态截图入仓 `docs/release/evidence/b023-goal-actions/o-panel-actions.png`（三按钮可见）与 `o-panel-final.png`（删除后无目标）；临时服务与浏览器会话已回收。
+- 覆盖边界：`GOAL_STALE_REVISION`、400 畸形 payload、宿主不可达 502 由冻结套件机器断言；真实断网 502/500 按契约标 `[UNVERIFIED]` 靠 review。
+
+### 13.2 L3 靶向审查与修复复核
+
+- 审查收据：`.dev-team/review-l3a-b023.json`（状态流转，verdict FAIL，1 BLOCKING + 6 ADVISORY）、`.dev-team/review-l3a-b023-r2.json`（修复复核，verdict PASS）、`.dev-team/review-l3b-b023.json`（安全/协议一致性，上游审查服务 503 → `DEGRADED`，由 Lead 依据 Explorer wire 证据 + 宿主 RPC 实测探针 + 冻结套件复核，不冒充独立放行）。四份收据均经 `dev-review-lint.py` exit 0。
+- BLOCKING 根因：`goalActionRequest()` 写成功后 `loadSessionStats()` 会回拉尚未落盘的本地转录旧 CAS ref，覆盖刚确认的新 revision；连续动作必撞 `GOAL_STALE_REVISION`。
+- 修复：`mergeGoalWithConfirmed()` + `goalConfirmedGoal` / `goalConfirmedClearedId` 守卫，stats 回拉与 GET 真源共用同一合并口径；GET 追上/新 goal/clear 自动收口，`clearGoalRing()` 切会话清空。
+- 复核机器证据：审查员原静态 `counterexample_cmd` 重跑 exit 0；隔离 mock 端到端「edit → 立即 GET stats → 用返回 ref 发第二个 resume」返回 `ok:true` 且无 stale；冻结套件 13/13 PASS、ES5 acorn exit 0、unit 39/39、suite 7/7。
+- 6 条 ADVISORY（连击 in-flight guard、跨会话回调守卫、确认模态 ref 快照、`isGoalEditOpen` 未读、Esc 提示、写路径 zstd fold）本轮不修，登记为靠 review / 后续 backlog，未扩大改动范围。

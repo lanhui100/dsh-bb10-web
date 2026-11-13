@@ -147,6 +147,48 @@ let mockSidSeq = 0;
 // 契约 §5.4：mock session/modelCatalog 调用计数（供 CATALOG_FAIL_AFTER 接缝「成功 n 次后失败」）
 let mockCatalogCalls = 0;
 
+// B023 §25：mock 侧当前会话 goal 状态。undefined = 接缝未设置，GET 完全回退 zstd 折叠；
+// null = 显式无 goal；对象 = 一份 mock GoalView 初态。生产路径（Q20_MOCK_HOST≠1）绝不读写。
+/** 仅 Q20_MOCK_HOST=1 使用：把接缝 JSON 归一成完整 mock goal 内部状态。 */
+function normalizeMockGoalState(raw) {
+  const src = (raw && typeof raw === 'object') ? raw : {};
+  return {
+    id: (typeof src.id === 'string' && src.id) ? src.id : 'goal-1',
+    revision: (Number.isFinite(src.revision) && src.revision > 0) ? src.revision : 1,
+    objective: typeof src.objective === 'string' ? src.objective : '',
+    phase: (src.phase === 'paused' || src.phase === 'blocked' || src.phase === 'complete') ? src.phase : 'active',
+    maxGoalRounds: Number.isFinite(src.maxGoalRounds) ? src.maxGoalRounds : 0,
+    roundsStarted: Number.isFinite(src.roundsStarted) ? src.roundsStarted : 0,
+    createdAt: Number.isFinite(src.createdAt) ? src.createdAt : 0,
+    updatedAt: Number.isFinite(src.updatedAt) ? src.updatedAt : 0,
+  };
+}
+
+/** 仅 Q20_MOCK_HOST=1 使用：mock goal 对外视图，形状对齐 goalViewOf()。 */
+function mockGoalView() {
+  if (!mockGoalState) return null;
+  return {
+    id: mockGoalState.id,
+    revision: mockGoalState.revision,
+    objective: mockGoalState.objective,
+    phase: mockGoalState.phase,
+    maxGoalRounds: mockGoalState.maxGoalRounds,
+    roundsStarted: mockGoalState.roundsStarted,
+    createdAt: mockGoalState.createdAt,
+    updatedAt: mockGoalState.updatedAt,
+  };
+}
+
+let mockGoalState;
+if (Q20_MOCK_HOST && Object.prototype.hasOwnProperty.call(process.env, 'Q20_MOCK_HOST_GOAL')) {
+  try {
+    const raw = JSON.parse(process.env.Q20_MOCK_HOST_GOAL);
+    mockGoalState = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? normalizeMockGoalState(raw) : null;
+  } catch {
+    mockGoalState = null;
+  }
+}
+
 // mock 模式下启动即确保工作区创建根存在（真实 ~/ 天然存在，测试临时根需要预建）。
 if (Q20_MOCK_HOST && Q20_MOCK_HOME) {
   try { fs.mkdirSync(MOCK_WORKSPACE_ROOT, { recursive: true }); } catch {}
@@ -542,6 +584,42 @@ function mockHandleRpc(method, request) {
       return { ok: true, value: {} };
     case 'session/prompt':
       return { ok: true, value: { accepted: true } };
+    // B023 §25：三个 goals/* method 的可判定 mock 行为（仅 Q20_MOCK_HOST=1）。
+    // ref.id 是 goal id，agentId 是 sessionId；CAS 冲突与上游同 code。
+    case 'goals/edit':
+    case 'goals/clear':
+    case 'goals/resume': {
+      const action = method.slice('goals/'.length);
+      const ref = (req.ref && typeof req.ref === 'object') ? req.ref : {};
+      if (!mockGoalState) {
+        return { ok: false, code: 'GOAL_NOT_FOUND', error: 'no current goal' };
+      }
+      if (ref.id !== mockGoalState.id || ref.revision !== mockGoalState.revision) {
+        return {
+          ok: false,
+          code: 'GOAL_STALE_REVISION',
+          error: 'stale goal ref "' + String(ref.id) + '" revision ' + String(ref.revision) +
+            '; current is "' + mockGoalState.id + '" revision ' + String(mockGoalState.revision),
+        };
+      }
+      const before = mockGoalView();
+      if (action === 'clear') {
+        // 宿主 goals/clear 返回 tombstone GoalRef；对外 goal 由代理层显式映射成 null。
+        mockGoalState = null;
+        return { ok: true, value: { id: before.id, revision: before.revision + 1 } };
+      }
+      mockGoalState = normalizeMockGoalState(before);
+      mockGoalState.revision = before.revision + 1;
+      mockGoalState.updatedAt = Date.now();
+      if (action === 'edit') {
+        const editReq = (req.request && typeof req.request === 'object') ? req.request : {};
+        if (typeof editReq.objective === 'string') mockGoalState.objective = editReq.objective;
+        if (Number.isFinite(editReq.maxGoalRounds)) mockGoalState.maxGoalRounds = editReq.maxGoalRounds;
+      } else {
+        mockGoalState.phase = 'active';
+      }
+      return { ok: true, value: mockGoalView() };
+    }
     case 'workspace/insertSessionBefore': {
       const wid = req.workspaceId;
       const sid = req.sessionId;
@@ -5838,6 +5916,8 @@ const sessionStatsCache = new Map();
 
 async function getSessionStats(targetCwd, sessionId) {
   const normalizedCwd = path.resolve(targetCwd);
+  // B023：mock goal 接缝。undefined = 未设置接缝，下面各分支逐字节保持原 zstd 折叠行为。
+  const mockGoalOverride = (Q20_MOCK_HOST && mockGoalState !== undefined) ? mockGoalView() : undefined;
   if (!sessionId) {
     return {
       sessionId: '',
@@ -5863,7 +5943,7 @@ async function getSessionStats(targetCwd, sessionId) {
       cacheHitRate: null,
       tokenSpeed: '0.0',
       durationMs: 0,
-      goal: null,
+      goal: mockGoalOverride !== undefined ? mockGoalOverride : null,
     };
   }
 
@@ -5905,7 +5985,7 @@ async function getSessionStats(targetCwd, sessionId) {
       cacheHitRate: hitRate,
       tokenSpeed: '0.0',
       durationMs: 0,
-      goal: null,
+      goal: mockGoalOverride !== undefined ? mockGoalOverride : null,
     };
   }
 
@@ -5926,6 +6006,8 @@ async function getSessionStats(targetCwd, sessionId) {
       reasoningEffort: isRunning ? (task?.reasoningEffort || '') : (cached.stats.reasoningEffort || ''),
       isRunning,
       state,
+      // B023：mock goal 接缝下缓存分支同样取实时 mock 状态，避免写动作后旧 CAS ref 回填。
+      goal: mockGoalOverride !== undefined ? mockGoalOverride : cached.stats.goal,
     };
   }
 
@@ -6081,7 +6163,7 @@ async function getSessionStats(targetCwd, sessionId) {
     cacheHitRate: hitRate,
     tokenSpeed,
     durationMs: decodeMs,
-    goal: goalViewOf(goalAcc),
+    goal: mockGoalOverride !== undefined ? mockGoalOverride : goalViewOf(goalAcc),
   };
 
   if (sessionStatsCache.size > 500) sessionStatsCache.clear();
@@ -7049,11 +7131,102 @@ const server = http.createServer((req, res) => {
         sendJson(res, 400, { error: 'Missing query parameter "cwd"' });
         return;
       }
-      const goal = getSessionGoal(cwd, id);
+      // B023 §25：仅 mock 且 Q20_MOCK_HOST_GOAL 已设置时优先读进程内状态；
+      // 未设置（mockGoalState === undefined）时完全回退既有 zstd 折叠，行为逐字节不变。
+      const goal = (Q20_MOCK_HOST && mockGoalState !== undefined) ? mockGoalView() : getSessionGoal(cwd, id);
       sendJson(res, 200, { sessionId: id, goal });
     } catch (err) {
       console.error(`[API /api/session/goal ERROR] ${err.stack || err.message}`);
       sendJson(res, 500, { error: sanitizeErrorMessage(err) }, req);
+    }
+    return;
+  }
+
+  // B023：当前会话 goal 的修改／删除／继续，Q20 侧只做校验 + 宿主 RPC 代理 + 错误透传。
+  if (req.method === 'POST' && pathname === '/api/session/goal/action') {
+    let body;
+    try {
+      body = await parseJsonBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('bad body');
+    } catch {
+      sendJson(res, 400, { ok: false, error: 'Invalid JSON body' }, req);
+      return;
+    }
+    const allowedFields = ['cwd', 'sessionId', 'action', 'ref', 'objective'];
+    const unknown = Object.keys(body).filter((k) => allowedFields.indexOf(k) === -1);
+    if (unknown.length) {
+      sendJson(res, 400, { ok: false, error: 'Unknown field "' + unknown[0] + '"' }, req);
+      return;
+    }
+    const { cwd, sessionId, action, ref } = body;
+    if (typeof cwd !== 'string' || !cwd.trim()) {
+      sendJson(res, 400, { ok: false, error: 'Missing or invalid "cwd"' }, req);
+      return;
+    }
+    if (!isValidSessionId(sessionId)) {
+      sendJson(res, 400, { ok: false, error: 'Invalid "sessionId"', code: 'session/invalid-id' }, req);
+      return;
+    }
+    if (action !== 'edit' && action !== 'clear' && action !== 'resume') {
+      sendJson(res, 400, { ok: false, error: 'Invalid "action": expected edit|clear|resume' }, req);
+      return;
+    }
+    if (!ref || typeof ref !== 'object' || Array.isArray(ref) ||
+        typeof ref.id !== 'string' || !ref.id ||
+        !Number.isInteger(ref.revision) || ref.revision <= 0) {
+      sendJson(res, 400, { ok: false, error: 'Invalid "ref": expected {id:string,revision:positive integer}' }, req);
+      return;
+    }
+    let objective = '';
+    if (action === 'edit') {
+      if (typeof body.objective !== 'string') {
+        sendJson(res, 400, { ok: false, error: 'Missing or invalid "objective"' }, req);
+        return;
+      }
+      objective = body.objective.replace(/^\s+|\s+$/g, '');
+      if (!objective || objective.length > 2000) {
+        sendJson(res, 400, { ok: false, error: 'Invalid "objective": expected non-empty, max 2000 chars' }, req);
+        return;
+      }
+    } else if (body.objective !== undefined) {
+      sendJson(res, 400, { ok: false, error: 'Field "objective" is only allowed for action "edit"' }, req);
+      return;
+    }
+    // 「无 goal」一律不向宿主发 RPC；mock 接缝已设置时以进程内状态为准。
+    const currentGoal = (Q20_MOCK_HOST && mockGoalState !== undefined)
+      ? mockGoalView()
+      : getSessionGoal(cwd, sessionId);
+    if (!currentGoal) {
+      sendJson(res, 400, { ok: false, error: 'no current goal', code: 'goal/not-found' }, req);
+      return;
+    }
+    // 宿主 wire 层 args 顶层直接放 agentId/ref/request，不套 {request:{...}}。
+    const rpcArgs = { agentId: sessionId, ref: { id: ref.id, revision: ref.revision } };
+    if (action === 'edit') rpcArgs.request = { objective };
+    try {
+      const rpcRes = await callDshWebRpc('goals/' + action, rpcArgs, 8000, { rawArgs: true });
+      if (!rpcRes || !rpcRes.ok) {
+        const errText = String((rpcRes && rpcRes.error) || 'goal action failed');
+        let code = (rpcRes && rpcRes.code) ? String(rpcRes.code) : '';
+        // 网关把上游 GOAL_STALE_REVISION 投影成 gateway/internal + message 含 stale goal ref。
+        if ((code === 'gateway/internal' || !code) && /stale goal ref/i.test(errText)) {
+          code = 'GOAL_STALE_REVISION';
+        }
+        const out = { ok: false, error: errText };
+        if (code) out.code = code;
+        if (rpcRes && rpcRes.unreachable) {
+          sendJson(res, 502, out, req);
+          return;
+        }
+        sendJson(res, 200, out, req);
+        return;
+      }
+      // goals/clear 的 value 是 tombstone GoalRef，不是 GoalView；对外 goal 必须为 null。
+      const goal = action === 'clear' ? null : ((rpcRes.value && typeof rpcRes.value === 'object') ? rpcRes.value : currentGoal);
+      sendJson(res, 200, { ok: true, goal }, req);
+    } catch (err) {
+      console.error(`[API /api/session/goal/action ERROR] ${err.stack || err.message}`);
+      sendJson(res, 500, { ok: false, error: sanitizeErrorMessage(err) }, req);
     }
     return;
   }

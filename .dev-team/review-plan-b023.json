@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "verdict": "PASS",
+  "audited_scopes": [
+    ".agents/notes/implemented/feature/2026-11-13-ctrl-o-goal-actions.md",
+    "server.mjs",
+    "static/index.html",
+    "README.md",
+    "tests/acceptance/RED-PHASE.md",
+    "tests/acceptance/goal-actions.mjs"
+  ],
+  "findings": [],
+  "reviewer": {
+    "kind": "lead",
+    "session_id": "session-mwe96ka9sbjhv9",
+    "fresh_context": true
+  },
+  "executed_by": "lead",
+  "reviewed_commit": "584f1d0653a8b86a7c667c5120c9257e102f5a48",
+  "attestation": {
+    "self_signed": false,
+    "degraded": true,
+    "reason": "方案阶段合并 Explorer 事实清单、Protocol Agent 复核与 change-review 证据；两路 L3 靶向审查在收口阶段执行。"
+  }
+}

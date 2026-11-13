@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "verdict": "FAIL",
+  "audited_scopes": [
+    "server.mjs",
+    "static/index.html",
+    "README.md",
+    "tests/acceptance/RED-PHASE.md",
+    "tests/acceptance/goal-actions.mjs"
+  ],
+  "findings": [
+    {
+      "file": "static/index.html",
+      "line": 6642,
+      "rule": "CONCURRENCY",
+      "counterexample_cmd": "node -e 'const f=require(\"fs\");const h=f.readFileSync(\"static/index.html\",\"utf8\");const i=h.indexOf(\"latestSessionStats.goal = body.goal\");const j=h.indexOf(\"function loadSessionStats\");const k=h.indexOf(\"function syncGoalRing\");const floor=/goalConfirmedGoal|mergeGoalWithConfirmed/.test(h.slice(j,k));const rf=/loadSessionStats\\(\\)/.test(h.slice(h.indexOf(\"function goalActionRefresh\"),h.indexOf(\"function goalActionRequest\")));console.log(\"legacyOverride=\",i>=0,\"floor=\",floor,\"refetch=\",rf);process.exit(i>=0&&rf&&!floor?1:0)'",
+      "severity": "BLOCKING"
+    },
+    {
+      "file": "static/index.html",
+      "line": 6628,
+      "rule": "CONCURRENCY",
+      "counterexample_cmd": "node -e 'const h=require(\"fs\").readFileSync(\"static/index.html\",\"utf8\");console.log(\"inFlightGuard=\",/goalActionInFlight|pendingGoalAction/.test(h));process.exit(0)'",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "static/index.html",
+      "line": 6634,
+      "rule": "CONCURRENCY",
+      "counterexample_cmd": "node -e 'const h=require(\"fs\").readFileSync(\"static/index.html\",\"utf8\");const b=h.slice(h.indexOf(\"function goalActionRequest\"),h.indexOf(\"function closeGoalEditBox\"));console.log(\"sessionGuard=\",/currentSessionId\\s*===\\s*sid|sessionSeqToken/.test(b));process.exit(0)'",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "static/index.html",
+      "line": 6614,
+      "rule": "CONTRACT_BREAK",
+      "counterexample_cmd": "node -e 'const h=require(\"fs\").readFileSync(\"static/index.html\",\"utf8\");console.log(\"confirmRefSnapshot=\",/goalForPanelGlobal\\.revision/.test(h));process.exit(0)'",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "static/index.html",
+      "line": 2351,
+      "rule": "CORRECTNESS",
+      "counterexample_cmd": "node -e 'const h=require(\"fs\").readFileSync(\"static/index.html\",\"utf8\");console.log(\"goalEditOpenReads=\",(h.match(/isGoalEditOpen/g)||[]).length);process.exit(0)'",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "static/index.html",
+      "line": 6669,
+      "rule": "NFR_VIOLATION",
+      "counterexample_cmd": "grep -n 'Esc 取消' static/index.html || true",
+      "severity": "ADVISORY"
+    },
+    {
+      "file": "server.mjs",
+      "line": 7196,
+      "rule": "NFR_VIOLATION",
+      "counterexample_cmd": "grep -n 'getSessionGoal(cwd, sessionId)' server.mjs || true",
+      "severity": "ADVISORY"
+    }
+  ],
+  "reviewer": {
+    "kind": "subagent",
+    "session_id": "f3cc3040-8803-4390-8349-8cdc41a02074",
+    "fresh_context": true
+  },
+  "executed_by": "f3cc3040-8803-4390-8349-8cdc41a02074",
+  "reviewed_commit": "584f1d0653a8b86a7c667c5120c9257e102f5a48",
+  "attestation": {
+    "self_signed": false
+  }
+}

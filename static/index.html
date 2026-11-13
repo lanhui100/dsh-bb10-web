@@ -2344,7 +2344,31 @@
       </div>
       <div id="status-body"></div>
     </div>
-    <div class="tree-hint">O 键开关 · R 刷新 · 触控右上角 ✕ 关闭</div>
+    <div class="tree-hint">O 键开关 · R 刷新 · 触控右上角 ✕ 关闭 · O 面板内 E 修改 / D 删除 / G 继续目标</div>
+  </div>
+
+  <!-- B023: O 面板 goal 行内编辑框（隐藏态，静态锚点） -->
+  <div id="goal-edit-box" style="display: none; position: absolute; left: 30px; right: 30px; top: 58%; z-index: 480; background: #1E1E1E; border: 1px solid #444444; border-radius: 4px; padding: 8px; -webkit-box-sizing: border-box; box-sizing: border-box;">
+    <input id="goal-edit-input" type="text" style="width: 100%; height: 30px; line-height: 20px; font-size: 12px; color: #FFFFFF; background: #121212; border: 1px solid #444444; border-radius: 3px; padding: 4px 6px; -webkit-box-sizing: border-box; box-sizing: border-box; -webkit-appearance: none; appearance: none; outline: none;" />
+    <div style="margin-top: 6px; text-align: right; overflow: hidden;">
+      <button id="goal-edit-cancel" class="btn-sm" style="background: #2A2A2A; border-color: #444444; color: #E0E0E0; margin-right: 8px; min-width: 64px;">取消</button>
+      <button id="goal-edit-save" class="btn-sm" style="background: #00897B; border-color: #00695C; color: #FFFFFF; min-width: 64px; font-weight: bold;">保存 [↵]</button>
+    </div>
+  </div>
+
+  <!-- B023: O 面板 goal 删除二次确认（复用既有确认模态风格） -->
+  <div id="goal-clear-confirm" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.88); z-index: 470; display: none;">
+    <div id="goal-clear-confirm-close-btn" class="panel-close-btn">✕</div>
+    <div style="position: absolute; top: 26%; left: 30px; right: 30px; background: #1E1E1E; border: 1px solid #444444; border-radius: 4px; padding: 14px 14px 12px 14px; -webkit-box-sizing: border-box; box-sizing: border-box;">
+      <div style="font-size: 14px; font-weight: bold; color: #FFFFFF; margin-bottom: 8px; line-height: 18px;">
+        <span style="color: #FF5252; margin-right: 4px;">🗑</span>确认删除当前目标？
+      </div>
+      <div id="goal-clear-confirm-desc" style="font-size: 11px; color: #B0B0B0; line-height: 16px; margin-bottom: 12px; word-break: break-all;">清除当前目标（tombstone），历史记录保留。</div>
+      <div style="text-align: right; overflow: hidden;">
+        <button id="goal-clear-confirm-cancel-btn" class="btn-sm" style="background: #2A2A2A; border-color: #444444; color: #E0E0E0; margin-right: 8px; min-width: 64px;">取消 [X]</button>
+        <button id="goal-clear-confirm-ok-btn" class="btn-sm" style="background: #C62828; border-color: #8E0000; color: #FFFFFF; min-width: 72px; font-weight: bold;">✔ 删除 [↵]</button>
+      </div>
+    </div>
   </div>
 
   <!-- Quick Messages modal (shortcut G) -->
@@ -2400,6 +2424,7 @@
         <tr><td class="help-key">M</td><td class="help-desc">全屏展开 / 收起模型选择 (按常用与 Provider 分组，F 收藏，D 设默认)</td></tr>
         <tr><td class="help-key">P</td><td class="help-desc">全屏展开 / 收起运行权限配置</td></tr>
         <tr><td class="help-key">O</td><td class="help-desc">全屏展开 / 收起当前会话状态面板 (含当前目标)</td></tr>
+        <tr><td class="help-key">O 面板内</td><td class="help-desc">O 面板内 E 修改 / D 删除 / G 继续目标</td></tr>
         <tr><td class="help-key">↑ / ↓ / 回车</td><td class="help-desc">弹窗内上下选择 / 确认（触控板可用）</td></tr>
         <tr><td class="help-key">N</td><td class="help-desc">新建空白会话并展开对话框</td></tr>
         <tr><td class="help-key">X</td><td class="help-desc">一键停止运行中的会话 (仅会话运行中生效)</td></tr>
@@ -3712,6 +3737,38 @@
     /* @Q20-EFFORT-END */
     // 当前会话目标（goal）单一状态源：null = 无目标；syncGoalRing 单点驱动红圈。
     var goalState = null;
+    // B023 L3：宿主写成功后本地 zstd 转录尚未落盘，stats 回拉会带回旧 CAS ref。
+    // goalConfirmedGoal 保存刚确认的 GoalView（clear 后为 null），goalConfirmedCleared
+    // 区分「从未确认」与「已确认删除」；loadSessionStats 用它挡住陈旧 revision 回填。
+    var goalConfirmedGoal = null;
+    var goalConfirmedCleared = false;
+    var goalConfirmedClearedId = '';
+    /** B023 L3：把任一服务端 goal 快照与本地刚确认态合并，返回 {goal,settle}。 */
+    function mergeGoalWithConfirmed(incoming) {
+      if (goalConfirmedCleared) {
+        // 同 id 的旧快照继续挡住；真源为 null 或出现新 goal id 即收口。
+        if (!incoming || (goalConfirmedClearedId && String(incoming.id || '') !== goalConfirmedClearedId)) {
+          goalConfirmedCleared = false;
+          return { goal: incoming || null, settle: true };
+        }
+        return { goal: null, settle: false };
+      }
+      if (!goalConfirmedGoal) return { goal: incoming || null, settle: true };
+      if (incoming && String(incoming.id || '') !== String(goalConfirmedGoal.id || '')) {
+        goalConfirmedGoal = null;
+        return { goal: incoming, settle: true };
+      }
+      if (incoming && Number(incoming.revision || 0) >= Number(goalConfirmedGoal.revision || 0)) {
+        goalConfirmedGoal = null;
+        return { goal: incoming, settle: true };
+      }
+      return { goal: goalConfirmedGoal, settle: false };
+    }
+    // B023：O 面板内目标动作状态（全局，供 document.onkeydown 消费判定）。
+    var goalForPanelGlobal = null;
+    var isGoalClearConfirmOpen = false;
+    var isGoalEditOpen = false;
+    var goalEditDraft = '';
     var isStatsLoading = false;
     var liveTokenCount = 0;
     var liveStreamStartTime = 0;
@@ -6463,6 +6520,10 @@
     function closeStatus() {
       isStatusOpen = false;
       statusOverlay.style.display = 'none';
+      // B023：关闭 O 面板时收起两个目标动作浮层，绝不遗留写确认态。
+      if (typeof closeGoalClearConfirm === 'function') closeGoalClearConfirm(true);
+      if (typeof closeGoalEditBox === 'function') closeGoalEditBox();
+      goalForPanelGlobal = null;
       if (statusRefreshTimer) {
         clearInterval(statusRefreshTimer);
         statusRefreshTimer = null;
@@ -6485,6 +6546,11 @@
             try {
               var incomingStats = JSON.parse(xhr.responseText);
               if (currentSessionId !== sid && sid) return;
+              // B023 L3：宿主已确认的新 goal 优先于尚未落盘的本地转录快照；
+              // 同 id 更旧 revision（或已确认 clear）用确认态覆盖，更新/新 id 以服务端为准。
+              if (incomingStats && ('goal' in incomingStats)) {
+                incomingStats.goal = mergeGoalWithConfirmed(incomingStats.goal).goal;
+              }
               latestSessionStats = incomingStats;
               // stats 内嵌 goal：piggyback 同步红圈，零额外请求
               if (latestSessionStats && ('goal' in latestSessionStats)) {
@@ -6539,6 +6605,10 @@
       try { composerTriggerBtn.title = tip; } catch (e) {}
     }
     function clearGoalRing() {
+      // 切会话 / 新会话 / 无会话：本地确认态随之失效，绝不跨会话串 CAS ref。
+      goalConfirmedGoal = null;
+      goalConfirmedCleared = false;
+      goalConfirmedClearedId = '';
       syncGoalRing(null);
     }
     // 独立拉取当前会话目标（stats 未覆盖的终态/attach 收口点调用）
@@ -6557,12 +6627,121 @@
           if (s === 200 || s === 0) {
             try {
               var body = JSON.parse(g.responseText);
-              if (body && ('goal' in body)) syncGoalRing(body.goal);
+              if (body && ('goal' in body)) {
+                // GET /api/session/goal 是权威真源；一致/更新即清掉本地确认态，永不钉死。
+                var merged = mergeGoalWithConfirmed(body.goal);
+                if (merged.settle) syncGoalRing(merged.goal);
+              }
             } catch (e4) {}
           }
         }
       };
       try { g.send(); } catch (e5) {}
+    }
+    /* B023：O 面板目标动作（100% ES5，XHR + 字符串拼接） */
+    function goalActionEl(id) {
+      return document.getElementById(id);
+    }
+    function goalActionRefresh() {
+      if (typeof loadSessionStats === 'function') loadSessionStats();
+      if (typeof refreshGoalRing === 'function') refreshGoalRing();
+      if (typeof renderStatusPanel === 'function') renderStatusPanel();
+    }
+    // 统一的写请求：ref.id 取 goal id，agentId 由服务端取 sessionId。
+    function goalActionRequest(action, objective) {
+      var cwd = '';
+      var sid = '';
+      var g = goalForPanelGlobal;
+      try { cwd = getCwd(); } catch (e1) {}
+      try { sid = getSid(); } catch (e2) {}
+      if (!cwd || !sid || !g) { setStatus('当前无可操作的目标'); return; }
+      var payload = {
+        cwd: cwd,
+        sessionId: sid,
+        action: action,
+        ref: { id: String(g.id || ''), revision: Number(g.revision) || 0 }
+      };
+      if (action === 'edit') payload.objective = objective;
+      var x = new XMLHttpRequest();
+      x.open('POST', '/api/session/goal/action', true);
+      x.setRequestHeader('Content-Type', 'application/json');
+      x.onreadystatechange = function() {
+        if (x.readyState !== 4) return;
+        var st = 0;
+        var body = null;
+        try { st = x.status; } catch (e3) {}
+        try { body = JSON.parse(x.responseText); } catch (e4) {}
+        if ((st === 200 || st === 0) && body && body.ok === true) {
+          isGoalEditOpen = false;
+          goalEditDraft = '';
+          closeGoalEditBox();
+          // B023 L3：登记宿主刚确认的状态，供 loadSessionStats 挡住未落盘转录的旧 ref 回填。
+          // clear 用 cleared 标志表示「已确认删除」，避免 null 与「从未确认」混淆。
+          goalConfirmedGoal = (body.goal && typeof body.goal === 'object') ? body.goal : null;
+          goalConfirmedCleared = !goalConfirmedGoal;
+          goalConfirmedClearedId = goalConfirmedCleared ? String(g.id || '') : '';
+          if (latestSessionStats) latestSessionStats.goal = goalConfirmedGoal;
+          syncGoalRing(goalConfirmedGoal);
+          goalActionRefresh();
+          setStatus('目标已' + (action === 'edit' ? '修改' : (action === 'clear' ? '删除' : '继续')));
+        } else {
+          var msg = (body && body.error) ? String(body.error) : ('请求失败 (HTTP ' + st + ')');
+          var code = (body && body.code) ? ' [' + String(body.code) + ']' : '';
+          setStatus('目标操作失败: ' + msg + code);
+        }
+      };
+      try { x.send(JSON.stringify(payload)); } catch (e5) { setStatus('目标操作请求异常'); }
+    }
+    function closeGoalEditBox() {
+      var box = goalActionEl('goal-edit-box');
+      if (box) box.style.display = 'none';
+      var inp = goalActionEl('goal-edit-input');
+      if (inp) { try { inp.blur(); } catch (e6) {} }
+      isGoalEditOpen = false;
+    }
+    function openGoalEdit() {
+      var g = goalForPanelGlobal;
+      var box = goalActionEl('goal-edit-box');
+      var inp = goalActionEl('goal-edit-input');
+      if (!g || !box || !inp) return;
+      goalEditDraft = String(g.objective || '');
+      inp.value = goalEditDraft;
+      box.style.display = 'block';
+      isGoalEditOpen = true;
+      try { inp.focus(); } catch (e7) {}
+      setStatus('编辑目标 [↵ 保存 / Esc 取消]');
+    }
+    function openGoalClearConfirm() {
+      if (!goalForPanelGlobal || isGoalClearConfirmOpen) return;
+      var overlay = goalActionEl('goal-clear-confirm');
+      var desc = goalActionEl('goal-clear-confirm-desc');
+      if (!overlay) return;
+      isGoalClearConfirmOpen = true;
+      if (desc) {
+        desc.innerHTML = '清除当前目标（tombstone），历史记录保留。<br><span style="color:#FFFFFF;font-weight:bold;">' + escapeHtml(String(goalForPanelGlobal.objective || '')) + '</span>';
+      }
+      overlay.style.display = 'block';
+      setStatus('请确认删除目标 [Enter 确认 / X 取消]');
+    }
+    // 取消只收起模态，绝不调用任何写函数（契约 §32⑦）。
+    function closeGoalClearConfirm(quiet) {
+      var overlay = goalActionEl('goal-clear-confirm');
+      isGoalClearConfirmOpen = false;
+      if (overlay) overlay.style.display = 'none';
+      if (!quiet) setStatus('已取消删除目标');
+    }
+    function executeGoalClear() {
+      if (!isGoalClearConfirmOpen) return;
+      closeGoalClearConfirm(true);
+      goalActionRequest('clear', '');
+    }
+    function wireGoalActionButtons() {
+      var editBtn = goalActionEl('goal-action-edit');
+      var clearBtn = goalActionEl('goal-action-clear');
+      var resumeBtn = goalActionEl('goal-action-resume');
+      if (editBtn) editBtn.onclick = function() { openGoalEdit(); };
+      if (clearBtn) clearBtn.onclick = function() { openGoalClearConfirm(); };
+      if (resumeBtn) resumeBtn.onclick = function() { goalActionRequest('resume', ''); };
     }
     /* @Q20-GOAL-END */
 
@@ -6684,11 +6863,19 @@
       html += '<tr><td class="st-k">会话</td><td class="st-v">' + stateDot + '<span style="font-weight:bold;color:#FFFFFF;">' + escapeHtml(summaryTitle) + '</span>' + (sid ? '<div style="font-size:10px;color:#777777;margin-top:2px;">ID: ' + escapeHtml(sid) + '</div>' : '') + '</td></tr>';
       // 当前目标行：stats 内嵌优先，回退 goalState；无目标显示"无"
       var goalForPanel = (latestSessionStats && ('goal' in latestSessionStats)) ? latestSessionStats.goal : ((typeof goalState !== 'undefined') ? goalState : null);
+      // B023：面板内动作可用性单一状态源（无 goal 时三个动作不可用、不消费键）。
+      goalForPanelGlobal = goalForPanel || null;
       if (goalForPanel) {
         var gPhaseCn = goalForPanel.phase === 'paused' ? '已暂停' : (goalForPanel.phase === 'blocked' ? '受阻' : (goalForPanel.phase === 'complete' ? '已完成' : '进行中'));
         html += '<tr><td class="st-k">当前目标</td><td class="st-v"><span style="color:#E53935;font-weight:bold;">●</span> <span style="color:#FFFFFF;">' + escapeHtml(String(goalForPanel.objective || '')) + '</span><div style="font-size:10px;color:#888888;">' + escapeHtml(gPhaseCn) + (goalForPanel.maxGoalRounds ? ' · 上限 ' + escapeHtml(String(goalForPanel.maxGoalRounds)) + ' 轮' : '') + '</div></td></tr>';
+        html += '<tr><td class="st-k">目标操作</td><td class="st-v">'
+          + '<button id="goal-action-edit" class="btn-sm" style="background:#0078D7;border-color:#005A9E;color:#FFFFFF;margin-right:6px;">修改 [E]</button>'
+          + '<button id="goal-action-clear" class="btn-sm" style="background:#C62828;border-color:#8E0000;color:#FFFFFF;margin-right:6px;">删除 [D]</button>'
+          + '<button id="goal-action-resume" class="btn-sm" style="background:#00897B;border-color:#00695C;color:#FFFFFF;">继续 [G]</button>'
+          + '</td></tr>';
       } else {
         html += '<tr><td class="st-k">当前目标</td><td class="st-v"><span style="color:#888888;">无</span></td></tr>';
+        html += '<tr><td class="st-k">目标操作</td><td class="st-v"><span style="color:#888888;">无目标时不可用</span></td></tr>';
       }
       html += '<tr><td class="st-k">运行权限</td><td class="st-v"><span style="color:#FFD866;font-family:monospace;font-size:11px;">' + escapeHtml(permText) + '</span></td></tr>';
       html += '<tr><td class="st-k">模式</td><td class="st-v"><span style="color:#4EC9B0;font-weight:bold;font-size:11px;">' + escapeHtml(modeText) + '</span></td></tr>';
@@ -6721,6 +6908,8 @@
       html += '</table>';
 
       statusBody.innerHTML = html;
+      // B023：innerHTML 重绘后重新接线三个动作按钮。
+      wireGoalActionButtons();
     }
 
     function sessLabel(s) {
@@ -8237,6 +8426,63 @@
       if ('onpropertychange' in wsAddInput) {
         wsAddInput.onpropertychange = function() { wsAddShowErr(''); };
       }
+    }
+
+    // B023：O 面板 goal 编辑/删除确认弹窗接线（ES5，旧 WebKit 兼容）
+    var goalEditInput = goalActionEl('goal-edit-input');
+    var goalEditSaveBtn = goalActionEl('goal-edit-save');
+    var goalEditCancelBtn = goalActionEl('goal-edit-cancel');
+    if (goalEditInput) {
+      goalEditInput.onkeydown = function(e) {
+        e = e || window.event;
+        var c = e.keyCode || e.which;
+        if (c === 13) { // Enter 保存
+          if (e.preventDefault) e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          var v = String(goalEditInput.value || '').replace(/^\s+|\s+$/g, '');
+          if (v) goalActionRequest('edit', v);
+          else setStatus('目标内容不能为空');
+          return false;
+        }
+        if (c === 27) { // Esc 取消（PC 兜底）
+          if (e.preventDefault) e.preventDefault();
+          closeGoalEditBox();
+          return false;
+        }
+      };
+      // INPUT 焦点守卫：输入期间全局快捷键一律不拦截，正常打字不受影响。
+      goalEditInput.onkeyup = function() { goalEditDraft = goalEditInput.value; };
+      if ('onpropertychange' in goalEditInput) {
+        goalEditInput.onpropertychange = function() { goalEditDraft = goalEditInput.value; };
+      }
+    }
+    if (goalEditSaveBtn) {
+      goalEditSaveBtn.onclick = function() {
+        var v = String(goalEditInput ? goalEditInput.value : '').replace(/^\s+|\s+$/g, '');
+        if (v) goalActionRequest('edit', v);
+        else setStatus('目标内容不能为空');
+      };
+    }
+    if (goalEditCancelBtn) {
+      goalEditCancelBtn.onclick = function() { closeGoalEditBox(); };
+    }
+    var goalClearOverlay = goalActionEl('goal-clear-confirm');
+    var goalClearOkBtn = goalActionEl('goal-clear-confirm-ok-btn');
+    var goalClearCancelBtn = goalActionEl('goal-clear-confirm-cancel-btn');
+    var goalClearCloseBtn = goalActionEl('goal-clear-confirm-close-btn');
+    if (goalClearOkBtn) {
+      goalClearOkBtn.onclick = function() { executeGoalClear(); };
+    }
+    if (goalClearCancelBtn) {
+      goalClearCancelBtn.onclick = function() { closeGoalClearConfirm(); };
+    }
+    if (goalClearCloseBtn) {
+      goalClearCloseBtn.onclick = function() { closeGoalClearConfirm(); };
+    }
+    if (goalClearOverlay) {
+      goalClearOverlay.onclick = function(e) {
+        if (e && e.target === goalClearOverlay) closeGoalClearConfirm();
+      };
     }
 
     // W 面板 D 键移除确认弹窗接线（ES5，旧 WebKit 兼容）
@@ -13641,6 +13887,22 @@
         return;
       }
 
+      // B023：goal 删除二次确认模态（前置到 Esc chain 之前，自己处理 Enter/X/Esc/C）。
+      // 取消只收起模态，绝不触发任何写请求。
+      if (isGoalClearConfirmOpen) {
+        if (code === 13) { // Enter 确认删除
+          if (e.preventDefault) e.preventDefault();
+          executeGoalClear();
+          return false;
+        }
+        if (code === 88 || code === 27 || code === 67) { // X / Esc / C 取消
+          if (e.preventDefault) e.preventDefault();
+          closeGoalClearConfirm();
+          return false;
+        }
+        return false; // 模态打开期间吞掉其他快捷键
+      }
+
       // Permission confirm modal navigation state (checked BEFORE the global
       // Esc chain so the confirm gate is never bypassed): Space toggles
       // acknowledge, Enter enables (only when acknowledged), 'X' cancels
@@ -13761,6 +14023,17 @@
       // Modifier keys guard: do not intercept Ctrl/Alt shortcuts
       if (isCtrl || isMeta) {
         return;
+      }
+
+      // B023：O 状态面板内目标动作单键（E 修改 / D 删除 / G 继续）。
+      // 仅在面板打开、存在当前目标且命中 69/68/71 时消费；其余键（H/R/O/✕）照常放行。
+      if (isStatusOpen && goalForPanelGlobal && !isShift && !isAlt &&
+          (code === 69 || code === 68 || code === 71)) {
+        if (e.preventDefault) e.preventDefault();
+        if (code === 69) openGoalEdit();
+        else if (code === 68) openGoalClearConfirm();
+        else goalActionRequest('resume', '');
+        return false;
       }
 
       // 'H': Toggle Help Modal

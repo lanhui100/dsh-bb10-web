@@ -1,0 +1,16 @@
+PASS ① edit 正常流：objective 变更 + revision+1 (asserts=5)
+PASS ② clear 正常流：goal===null (asserts=3)
+PASS ③ resume 正常流：phase=active + revision+1 (asserts=5)
+PASS ④ 无 goal → 400 goal/not-found (asserts=3)
+PASS ④ 非法 sessionId → 400 (asserts=3)
+PASS ⑤ 陈旧 revision → 200 ok:false + GOAL_STALE_REVISION (asserts=4)
+PASS ⑥a 空/纯空白 objective → 400 (asserts=2)
+PASS ⑥b 负/零 revision → 400（校验错，非 CAS 冲突） (asserts=2)
+PASS ⑥c 未知 action → 400 (asserts=2)
+PASS ⑥d 非法 JSON → 400 (asserts=2)
+PASS ⑥e 缺字段（无 ref）→ 400 (asserts=2)
+PASS ⑥f 未知字段 → 400 (asserts=2)
+PASS ⑧ 静态接线：三动作按钮+编辑框+确认模态+H 表+README+裸 O (asserts=17)
+
+total=13 pass=13 fail=0
+EXIT=0
