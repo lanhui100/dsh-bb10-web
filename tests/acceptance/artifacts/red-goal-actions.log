@@ -1,0 +1,77 @@
+FAIL ① edit 正常流：objective 变更 + revision+1: edit HTTP 状态
+
+405 !== 200
+
+    
+    405 !== 200
+FAIL ② clear 正常流：goal===null: clear HTTP 状态
+
+405 !== 200
+
+    
+    405 !== 200
+FAIL ③ resume 正常流：phase=active + revision+1: resume HTTP 状态
+
+405 !== 200
+
+    
+    405 !== 200
+FAIL ④ 无 goal → 400 goal/not-found: 无 goal 必须 400（不得向宿主发 RPC）
+
+405 !== 400
+
+    
+    405 !== 400
+FAIL ④ 非法 sessionId → 400: 非法 sessionId（含 ..）必须 400
+
+405 !== 400
+
+    
+    405 !== 400
+FAIL ⑤ 陈旧 revision → 200 ok:false + GOAL_STALE_REVISION: 宿主业务拒绝走 200 + ok:false
+
+405 !== 200
+
+    
+    405 !== 200
+FAIL ⑥a 空/纯空白 objective → 400: 纯空白 objective 必须 400
+
+405 !== 400
+
+    
+    405 !== 400
+FAIL ⑥b 负/零 revision → 400（校验错，非 CAS 冲突）: revision=0 必须 400
+
+405 !== 400
+
+    
+    405 !== 400
+FAIL ⑥c 未知 action → 400: 未知 action 必须 400
+
+405 !== 400
+
+    
+    405 !== 400
+FAIL ⑥d 非法 JSON → 400: 非法 JSON 必须 400
+
+405 !== 400
+
+    
+    405 !== 400
+FAIL ⑥e 缺字段（无 ref）→ 400: 缺字段必须 400
+
+405 !== 400
+
+    
+    405 !== 400
+FAIL ⑥f 未知字段 → 400: 未知字段必须 400
+
+405 !== 400
+
+    
+    405 !== 400
+FAIL ⑧ 静态接线：三动作按钮+编辑框+确认模态+H 表+README+裸 O: 按钮 id goal-action-edit
+        at match (file://<home>/dsh-q20-web/tests/acceptance/goal-actions.mjs:30:54)
+        at file://<home>/dsh-q20-web/tests/acceptance/goal-actions.mjs:204:5
+
+total=13 pass=0 fail=13
