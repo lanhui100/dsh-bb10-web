@@ -1,0 +1,307 @@
+{
+ "applicability": {
+  "acceptance_tests_present": true,
+  "note": "无验收测试时 red/drift 规则判 not-applicable，绝不静默通过"
+ },
+ "repo_profile": {
+  "acceptance_dirs": [
+   "tests/acceptance"
+  ],
+  "has_acceptance": true,
+  "top_exts": [
+   [
+    "md",
+    211
+   ],
+   [
+    "log",
+    33
+   ],
+   [
+    "mjs",
+    30
+   ],
+   [
+    "json",
+    24
+   ],
+   [
+    "png",
+    19
+   ],
+   [
+    "sh",
+    5
+   ]
+  ],
+  "test_scripts": {
+   "test": "node test-decoupling.mjs && node test-unit.mjs",
+   "test:decouple": "node test-decoupling.mjs",
+   "test:fold": "node test-fold-smoke.cjs",
+   "test:preview": "node test-preview-browser.mjs",
+   "test:live": "node test-suite.mjs",
+   "test:all": "node test-decoupling.mjs && node test-unit.mjs && node test-fold-smoke.cjs && node test-suite.mjs"
+  }
+ },
+ "run_id": "session-mw47e45cavblex",
+ "task": "工作区外交付文件预览改由会话策略+交付物成员授权",
+ "tier": "B",
+ "base": "90b27b2",
+ "head": "aafd2fc",
+ "work": {
+  "L": 0,
+  "files": 0,
+  "board_tasks": [
+   "[Gate-1] 冻结 preview-policy 契约与纯函数空桩",
+   "[Red] preview-policy 验收测试（L2-T + L2-AT）",
+   "[Exec] 实现 preview-policy（server + client + 纯函数）"
+  ],
+  "gates_seen_in_session": {
+   "browser": 2
+  }
+ },
+ "commits": [
+  {
+   "sha": "25d8af55d22b",
+   "full": "25d8af55d22bb44c0fe6d1e36f422d6e337cf9d1",
+   "subject": "test(wave-2026-11-06-preview-policy): freeze contract, red-phase acceptance tests (L2-T + L2-AT)",
+   "files": [
+    ".dev-team/contract-wave-2026-11-06.md",
+    ".dev-team/receipts/baseline-decoupling.log",
+    ".dev-team/receipts/baseline-live.log",
+    ".dev-team/receipts/baseline-preview.log",
+    ".dev-team/receipts/baseline-unit.log",
+    ".dev-team/regression-baseline-2026-11-06.json",
+    ".dev-team/state.json",
+    "lib/preview-policy.mjs",
+    "tests/acceptance/RED-PHASE.md",
+    "tests/acceptance/adversarial/preview-policy-attack.mjs",
+    "tests/acceptance/artifacts/red-preview-policy-at.log",
+    "tests/acceptance/artifacts/red-preview-policy-runall.log",
+    "tests/acceptance/artifacts/red-preview-policy.log",
+    "tests/acceptance/lib/preview-host.mjs",
+    "tests/acceptance/run-all.mjs",
+    "tests/acceptance/suite-preview-policy.mjs"
+   ],
+   "stat": "16 files changed, 2424 insertions(+), 2 deletions(-)"
+  },
+  {
+   "sha": "2491389a9d55",
+   "full": "2491389a9d55edbe7cd7049fd1b79d068e6ac1ce",
+   "subject": "test(wave-2026-11-06-preview-policy): r4 security hardening red tests (sensitive denylist, cwd fail-closed, client wiring)",
+   "files": [
+    "tests/acceptance/RED-PHASE.md",
+    "tests/acceptance/adversarial/preview-policy-attack.mjs",
+    "tests/acceptance/artifacts/red-preview-policy-at-r4.log",
+    "tests/acceptance/artifacts/red-preview-policy-r4.log",
+    "tests/acceptance/lib/preview-host.mjs",
+    "tests/acceptance/suite-preview-policy.mjs"
+   ],
+   "stat": "6 files changed, 638 insertions(+), 13 deletions(-)"
+  },
+  {
+   "sha": "52693736dfad",
+   "full": "52693736dfad2eef2902edd156f5f84e279aa8f0",
+   "subject": "test(wave-2026-11-06-preview-policy): r8 deliverables-membership red tests (R-8/R-9 membership gate)",
+   "files": [
+    "tests/acceptance/RED-PHASE.md",
+    "tests/acceptance/adversarial/preview-policy-attack.mjs",
+    "tests/acceptance/artifacts/red-preview-policy-at-r8.log",
+    "tests/acceptance/artifacts/red-preview-policy-r8.log",
+    "tests/acceptance/suite-preview-policy.mjs"
+   ],
+   "stat": "5 files changed, 568 insertions(+), 9 deletions(-)"
+  },
+  {
+   "sha": "f9f0ec61a7a4",
+   "full": "f9f0ec61a7a41c42e4f79027cee4da22a2066a59",
+   "subject": "test(wave-2026-11-06-preview-policy): migrate pre-R8 cases to deliverables-membership contract (R-8)",
+   "files": [
+    "tests/acceptance/RED-PHASE.md",
+    "tests/acceptance/adversarial/preview-policy-attack.mjs",
+    "tests/acceptance/artifacts/green-preview-policy-at-r8.log",
+    "tests/acceptance/artifacts/green-preview-policy-r8.log",
+    "tests/acceptance/suite-preview-policy.mjs"
+   ],
+   "stat": "5 files changed, 230 insertions(+), 26 deletions(-)"
+  },
+  {
+   "sha": "571df920f279",
+   "full": "571df920f2790c46fe90d95e53243dd4bbffcf8f",
+   "subject": "test(wave-2026-11-06-preview-policy): r9 fail-closed on unknown session cwd (A14f red)",
+   "files": [
+    "tests/acceptance/RED-PHASE.md",
+    "tests/acceptance/artifacts/red-preview-policy-r9.log",
+    "tests/acceptance/suite-preview-policy.mjs"
+   ],
+   "stat": "3 files changed, 215 insertions(+)"
+  },
+  {
+   "sha": "0f64413f8c5d",
+   "full": "0f64413f8c5d25e247558d89e19aaf47c34d9757",
+   "subject": "feat(preview): allow out-of-workspace file preview when session holds full access and file is a session deliverable",
+   "files": [
+    ".agents/notes/implemented/bug-fix/2026-11-06-out-of-workspace-preview-session-policy.md",
+    ".agents/notes/implemented/feature/2026-09-23-message-file-fullscreen-preview.md",
+    ".dev-team/contract-wave-2026-11-06.md",
+    ".dev-team/meta-retrospective.md",
+    ".dev-team/receipts/green-adversarial.log",
+    ".dev-team/receipts/green-decoupling.log",
+    ".dev-team/receipts/green-e2e-outside.log",
+    ".dev-team/receipts/green-live.log",
+    ".dev-team/receipts/green-preview-browser.log",
+    ".dev-team/receipts/green-suite-preview-policy.log",
+    ".dev-team/receipts/green-unit.log",
+    ".dev-team/retro/pack-session-mvxbmiypc23jxh/PACK-session-mvxbmiypc23jxh.md",
+    ".dev-team/retro/pack-session-mvxbmiypc23jxh/pack-session-mvxbmiypc23jxh.json",
+    ".dev-team/review-l3a-preview.json",
+    ".dev-team/review-l3b-preview-r4.json",
+    ".dev-team/review-l3b-preview-r8.json",
+    ".dev-team/review-l3b-preview.json",
+    ".dev-team/review-l3p-preview.json",
+    ".dev-team/review-plan-r4.json",
+    ".dev-team/review-plan-r8.json",
+    ".dev-team/review-plan.json",
+    ".dev-team/state.json",
+    "docs/release/evidence/wave-2026-11-06-preview-policy/e2e-full-access-out-of-workspace.png",
+    "docs/release/evidence/wave-2026-11-06-preview-policy/e2e-no-session-denied.png",
+    "lib/preview-policy.mjs",
+    "server.mjs",
+    "static/index.html"
+   ],
+   "stat": "27 files changed, 2018 insertions(+), 53 deletions(-)"
+  },
+  {
+   "sha": "aafd2fca34e7",
+   "full": "aafd2fca34e7f8d1c4ab24b57f7fb2295310d606",
+   "subject": "chore(review): attach provenance (schema v2) to review receipts",
+   "files": [
+    ".dev-team/review-l3a-preview.json",
+    ".dev-team/review-l3b-preview-r4.json",
+    ".dev-team/review-l3b-preview-r8.json",
+    ".dev-team/review-l3b-preview.json",
+    ".dev-team/review-l3p-preview.json",
+    ".dev-team/review-plan-r4.json",
+    ".dev-team/review-plan-r8.json",
+    ".dev-team/review-plan.json"
+   ],
+   "stat": "8 files changed, 483 insertions(+), 382 deletions(-)"
+  }
+ ],
+ "post_run_commits": [],
+ "foreign_commits": [],
+ "frozen_test_drift": [],
+ "review_receipts": [
+  {
+   "file": ".dev-team/review-l3a-preview.json",
+   "schema_version": 2,
+   "executed_by": "f698317b-bacf-4791-ba7f-c4d57ec47072",
+   "reviewer_kind": "subagent",
+   "reviewer_session": "f698317b-bacf-4791-ba7f-c4d57ec47072",
+   "fresh_context": true,
+   "self_signed": false,
+   "reviewed_commit": "25d8af5",
+   "verdict": "PASS",
+   "independent": true
+  },
+  {
+   "file": ".dev-team/review-l3b-preview-r4.json",
+   "schema_version": 2,
+   "executed_by": "471424e1-54a0-4ff7-8e15-a4c63819d459",
+   "reviewer_kind": "subagent",
+   "reviewer_session": "471424e1-54a0-4ff7-8e15-a4c63819d459",
+   "fresh_context": true,
+   "self_signed": false,
+   "reviewed_commit": "2491389",
+   "verdict": "FAIL",
+   "independent": true
+  },
+  {
+   "file": ".dev-team/review-l3b-preview-r8.json",
+   "schema_version": 2,
+   "executed_by": "ac63d953-e8c3-4cea-86cd-a89e42123e22",
+   "reviewer_kind": "subagent",
+   "reviewer_session": "ac63d953-e8c3-4cea-86cd-a89e42123e22",
+   "fresh_context": true,
+   "self_signed": false,
+   "reviewed_commit": "571df92",
+   "verdict": "PASS",
+   "independent": true
+  },
+  {
+   "file": ".dev-team/review-l3b-preview.json",
+   "schema_version": 2,
+   "executed_by": "2e3c3c2a-0ad1-4222-8140-eac4087ac477",
+   "reviewer_kind": "subagent",
+   "reviewer_session": "2e3c3c2a-0ad1-4222-8140-eac4087ac477",
+   "fresh_context": true,
+   "self_signed": false,
+   "reviewed_commit": "25d8af5",
+   "verdict": "FAIL",
+   "independent": true
+  },
+  {
+   "file": ".dev-team/review-l3p-preview.json",
+   "schema_version": 2,
+   "executed_by": "a5288600-684b-49f2-9958-adb04a755406",
+   "reviewer_kind": "subagent",
+   "reviewer_session": "a5288600-684b-49f2-9958-adb04a755406",
+   "fresh_context": true,
+   "self_signed": false,
+   "reviewed_commit": "25d8af5",
+   "verdict": "PASS",
+   "independent": true
+  },
+  {
+   "file": ".dev-team/review-plan-r4.json",
+   "schema_version": 2,
+   "executed_by": "7292d902-e4c8-4a4d-8aec-a9435048e0a9",
+   "reviewer_kind": "subagent",
+   "reviewer_session": "7292d902-e4c8-4a4d-8aec-a9435048e0a9",
+   "fresh_context": true,
+   "self_signed": false,
+   "reviewed_commit": "2491389",
+   "verdict": "FAIL",
+   "independent": true
+  },
+  {
+   "file": ".dev-team/review-plan-r8.json",
+   "schema_version": 2,
+   "executed_by": "0ea268f5-1a98-47cd-9c0a-8832ed9269e3",
+   "reviewer_kind": "subagent",
+   "reviewer_session": "0ea268f5-1a98-47cd-9c0a-8832ed9269e3",
+   "fresh_context": true,
+   "self_signed": false,
+   "reviewed_commit": "571df92",
+   "verdict": "PASS",
+   "independent": true
+  },
+  {
+   "file": ".dev-team/review-plan.json",
+   "schema_version": 2,
+   "executed_by": "84bb46e1-b786-488f-8925-dffad2ca0d90",
+   "reviewer_kind": "subagent",
+   "reviewer_session": "84bb46e1-b786-488f-8925-dffad2ca0d90",
+   "fresh_context": true,
+   "self_signed": false,
+   "reviewed_commit": "25d8af5",
+   "verdict": "FAIL",
+   "independent": true
+  }
+ ],
+ "mechanical_red_flags": [
+  "self_signed_review:review-l3a-preview.json",
+  "self_signed_review:review-l3b-preview-r4.json",
+  "self_signed_review:review-l3b-preview-r8.json",
+  "self_signed_review:review-l3b-preview.json",
+  "self_signed_review:review-l3p-preview.json",
+  "self_signed_review:review-plan-r4.json",
+  "self_signed_review:review-plan-r8.json",
+  "self_signed_review:review-plan.json"
+ ],
+ "unknowns": [
+  "每个门禁实际抓到多少缺陷（gate_caught）需从 review JSON/测试日志判定",
+  "用户是否口头授权了自扩范围（scope）需读会话原文"
+ ],
+ "pack_hash": "9b99367580404d53"
+}

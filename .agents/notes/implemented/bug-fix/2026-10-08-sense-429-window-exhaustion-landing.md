@@ -6,7 +6,7 @@ Status: implemented
 
 2026-09-30 记录根因诊断（`implemented/bug-fix/2026-09-30-sense-429-window-exhaustion-diagnosis.md`，原 proposed）：sense 上游（deepseek-v4-flash）以 `429 {"message":"inference exceeds tpm/rpm limit","type":"rate_limit_error","code":"insufficient_quota"}` 表达 **RPM 分钟窗口耗尽**（每账号 ≈10 req/min，7 key 全池 70/min），而 DSH `llm-pi-ai` 的 `classifyPiAiError` 将含 `insufficient_quota` 的错误经 `isQuotaExceededError` 误判为 `QUOTA`（不在默认 retryable 白名单）→ **0 次重试直接失败**；即便判为 RATE_LIMIT，重试退避上限 10s ≪ 60s 窗口也救不回。诊断提出 P1（网关侧）/ P2（DSH 侧）/ P3（需求降级）修复序列。
 
-## 落地内容
+## Decision
 
 ### P1 网关（ponyllm，2026-10 期间由 ponylm 侧持续演进落地，本轮复核确认）
 - **多 key 429 切换池级退避**：`pool_failover_backoff`（`crates/ponyllm-core/src/executor/upstream.rs`），429 记录后切下一 key 前 sleep `min(earliest_unlock, 2s)`，杜绝毫秒连扫致全池冷却；
@@ -43,7 +43,7 @@ Status: implemented
 - **D. maxDelayMs 平级写在 retryPolicy 顶层**：否决——schema `validateKeys` 对未知顶层键抛错；必须嵌 `backoff`（`BACKOFF_KEYS = {initialDelayMs, maxDelayMs, jitterRatio}`）。
 - **E. 一次性给 sense 配置 rate_limits RPM 预算**：本次不做——配错值会人为削容，且共享池与否未实测；记录为运维后续项。
 
-## 风险
+## 潜在风险与约束
 
 - 分类器正则基于错误消息文本（pi-ai 上游扁平化所致），上游若改措辞可能回落 PI_AI_ERROR（不可重试）——已由红相测试固化当前措辞面，变更时契约测试会拦截。
 - profile 为本地配置，非仓库版本化；DSH 升级需重放该 patch（沿用现有 profile 备份机制）。

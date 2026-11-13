@@ -47,3 +47,6 @@ DSH 长时间会话中断，错误：
 - 会话实录实测（token 量级/节奏/并发突发）：`~/.dsh/sessions/--home-dm-dsh-q20-web--/session-mumu9sltjuub0m/session.v4.jsonl.zstd` 及兄弟会话 3a71d719/b46be1a2/c7d729f3。
 - 网关代码：`ponyllm-core/src/executor/upstream.rs`、`pool/{entry,pool,usage}.rs`、`crates/ponyllm-server/src/{extractors.rs,routes/chat.rs}`。
 - DSH 代码：`packages/llm/llm-pi-ai/src/stream.ts`、`packages/llm/llm/src/{retry-policy,error}.ts`、`packages/llm/llm-retry/src/index.ts`、`packages/llm/llm-deepseek/src/transport.ts`。
+
+## Decision
+- 按实现落地。

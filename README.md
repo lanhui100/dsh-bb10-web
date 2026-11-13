@@ -128,6 +128,13 @@ Open `http://127.0.0.1:3090` in the BlackBerry 10 (BB10) browser to start chatti
 
 ---
 
+## Backlog & Change Workflow
+
+- **待办唯一真源**：`backlog/tasks.jsonl`（契约 `backlog/README.md`；门禁 `bash .meta/gates/backlog-gate.sh`）。
+  历史待办载体（`.dev-team/` 波次状态、旧审计报告路线图）已冻结到 `backlog/legacy/`，不再新增 md 任务单。
+- 日常：`node scripts/backlog.mjs record|start|resolve|list`；引用写 `backlog:B001`。
+- 非平凡变更随提交落 `.agents/notes/` 决策记录（`.agents/notes/README.md` 是格式契约）。
+
 ## Production & Availability
 
 - **Systemd supervision**: use the generic template in `deploy/dsh-bb10-web.service` (requires `/etc/default/dsh-bb10-web` env file; set `DSH_WEB_URL`, `DSH_ROOT`, etc. there). Enable with `sudo cp deploy/dsh-bb10-web.service /etc/systemd/system/ && sudo systemctl enable --now dsh-bb10-web`.

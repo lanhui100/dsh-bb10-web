@@ -24,3 +24,9 @@ Status: implemented
 - `node test-decoupling.mjs`：100% PASS
 - `node test-suite.mjs`：7 个场景 100% PASS
 - `node test-unit.mjs`：33 个单元测试 100% PASS
+
+## Decision
+- 按实现落地。
+
+## Alternatives considered
+- 暂无其他更优替代，按当前方案实施。

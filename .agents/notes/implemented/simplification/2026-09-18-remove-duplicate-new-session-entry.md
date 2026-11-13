@@ -24,3 +24,6 @@ Status: implemented
 ## Consequences
 
 会话面板树从顶部直接列出会话列表；新建入口唯一化为面板底部绿色按钮与快捷键 `N`。ES5 PASS，回归 7/7。
+
+## Reintroduction conditions
+- 除非用户明确反馈需要该功能，否则不予恢复。

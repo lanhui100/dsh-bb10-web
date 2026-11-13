@@ -1,6 +1,9 @@
 server.log
 server.pid
 node_modules/
+
+# backlog 任务级租约（本地运行时状态：pid/会话/心跳，不入仓；契约见 backlog/README.md）
+backlog/.locks/
 .DS_Store
 *.tmp
 .q20_token

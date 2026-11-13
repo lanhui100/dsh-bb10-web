@@ -19,6 +19,7 @@
 | 用户文档 | 产品面向指南 | 贡献流程/决策史 | 待填 |
 
 **放置速查**：bug→事故复盘；理由→决策记录；过程→how-to；契约→包 README；
+待办→`backlog/tasks.jsonl`（唯一活账本，契约 `backlog/README.md`）；
 standing orders→根 AGENTS.md + 理由链。
 
 ## 写作规则

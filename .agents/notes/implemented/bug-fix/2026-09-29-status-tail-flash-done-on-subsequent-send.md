@@ -32,3 +32,6 @@ Status: implemented
 
 1. **仅在 `appendMessage` 中抑制 `renderSessionStatusTail`**：会增加隐式参数传递（如 `suppressTail`），破坏单一渲染闭环与后续历史追加语义，放弃。
 2. **时序前置 + 在途推流保护（本方案）**：符合状态机同构准则，以最小侵入确保状态推导始终正确。
+
+## Decision
+- 按实现落地。

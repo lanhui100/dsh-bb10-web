@@ -41,3 +41,6 @@ implemented
 2. **解耦门禁**：`node test-decoupling.mjs` 100% PASS。
 3. **单元测试与端到端套件**：`node test-unit.mjs`（33/33 PASS）、`node test-suite.mjs`（7/7 PASS）。
 4. **真实浏览器端到端**：使用 `agent-browser` 验证初始化页面正常加载，错误状态完全消除，`wsOptions=10 currentWs=<workspace-dir>`。
+
+## Decision
+- 按实现落地。

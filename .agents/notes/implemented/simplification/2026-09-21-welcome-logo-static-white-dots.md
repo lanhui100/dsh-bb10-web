@@ -21,3 +21,6 @@ Status: implemented
 - ES5 PASS，`test-decoupling.mjs` + `test-suite.mjs` 7/7 PASS。
 - Q20 上欢迎页零 JS 定时器，省 CPU/内存。
 - 如将来要恢复动效，恢复条件：用户明确要求 + 真机验证不假死。
+
+## Reintroduction conditions
+- 除非用户明确反馈需要该功能，否则不予恢复。

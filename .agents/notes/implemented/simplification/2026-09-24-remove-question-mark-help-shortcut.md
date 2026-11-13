@@ -23,3 +23,6 @@ Status: implemented
 
 - 快捷键速查入口收敛为单键 `H`，消除了与打字输入及复合键触发潜在的按键冲突。
 - 欢迎页与帮助面板提示文案一致。
+
+## Reintroduction conditions
+- 除非用户明确反馈需要该功能，否则不予恢复。

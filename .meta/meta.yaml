@@ -2,3 +2,4 @@
 # 版本由 git 派生；组件清单由 .meta/ + .agents/ 目录存在性充当；演进由 git + .agents/notes/ 的 ADR 充当。
 
 level: 1
+ai-surface: on

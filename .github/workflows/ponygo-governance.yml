@@ -1,0 +1,19 @@
+# ponygo 治理门（A5 = 薄适配器）：门禁逻辑本体在 .meta/gates/ci-verify.sh（A4），
+# 换 forge 只换这几行壳；本地等价命令 = bash .meta/gates/ci-verify.sh
+name: ponygo-governance
+permissions:
+  contents: read
+on:
+  push:
+  pull_request:
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: bash .meta/gates/ci-verify.sh
+      # backlog 账本门（pg-backlog v2）：判据真源 scripts/backlog.mjs（lint + doctor 跨归档/租约对账），
+      # 与 ADR 格式门解耦，独立 step 便于定位；账本缺失 → 门自己跳过；无 node → fail-closed。
+      - run: bash .meta/gates/backlog-gate.sh
+      - run: bash .meta/gates/backlog-gate.spec.sh

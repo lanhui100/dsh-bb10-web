@@ -33,3 +33,9 @@ Status: implemented
 - Acorn ES5 语法门禁：PASS
 - `test-decoupling.mjs`：PASS
 - `test-suite.mjs`：7/7 全量 PASS
+
+## Decision
+- 按实现落地。
+
+## Alternatives considered
+- 暂无其他更优替代，按当前方案实施。
