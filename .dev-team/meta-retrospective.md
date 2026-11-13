@@ -368,7 +368,7 @@ denylist 降为叠加防御。这既闭合凭据面，又精确匹配用户诉�
 - 机器门禁全绿：ES5 acorn、`node --check server.mjs`、`test-decoupling.mjs`、`test-unit.mjs`(39/39)、`test-suite.mjs`(7/7)、`test-fold-smoke.cjs`(41)、`backlog-gate.sh`、`backlog-gate.spec.sh`、`ci-verify.sh`、`verify-note.sh` 均 exit 0。
 - **门禁穿透（自曝 1）**：冻结套件只覆盖 HTTP 端点与静态锚点，浏览器 E2E 才暴露两个真实闭环缺陷：① mock 接缝未覆盖 `stats.goal`，O 面板显示「无目标」；② 写成功后 `loadSessionStats()` 用未落盘的旧转录覆盖新 CAS ref，连续动作必撞 `GOAL_STALE_REVISION`。二者均靠 agent-browser 真实旅程抓到，说明「HTTP 绿 + 静态接线绿」不足以证明 UI 状态闭环。
 - **L3 靶向审查命中**：状态流转视角给出 1 个可复跑 BLOCKING（同上的 CAS 旧值回填）+ 6 条 ADVISORY；修复后原 counterexample 重跑 exit 0 并落 `review-l3a-b023-r2.json`，6 条 ADVISORY 靠 review / 后续 backlog，未借机扩大改动。
-- 安全/协议一致性独立审查 subagent 因上游 503/EOF 不可用，`review-l3b-b023.json` 如实登记 `DEGRADED`，由 Lead 依据 Explorer wire 证据、宿主 RPC 实测探针与冻结套件复核，不冒充独立放行。这是门禁诚实边界而非假绿。
+- 安全/协议一致性独立审查 subagent 曾因上游 503/EOF 不可用，Lead 先登记 `DEGRADED` 并附替代证据链；迟到但独立的 subagent 最终落盘 `review-l3b-b023.json` verdict PASS（`self_signed=false`），覆盖真实/隔离宿主探针、wire 参数、502/陈旧码、tombstone→null、同源 XHR 与 XSS/CSS/ES5 红线。`DEGRADED` 不是最终态，文档已同步修正。
 - 浏览器硬断言：Console Error = 0；`o-panel-actions.png`（三按钮）与 `o-panel-final.png`（删除后无目标）入仓；临时 mock 服务、端口与浏览器会话全部回收。
 
 ## 三、分工契约与隔离有效性 (Contract Isolation)
@@ -386,11 +386,20 @@ denylist 降为叠加防御。这既闭合凭据面，又精确匹配用户诉�
 4. 上游审查服务不可用时，L3 收据必须 `DEGRADED` + 明确替代证据链，禁止用 Lead 自签 PASS 冒充独立审查。
 5. 6 条 ADVISORY（连击 in-flight guard、跨会话回调守卫、确认模态 ref 快照、Esc 提示、写路径 zstd fold 等）统一登记为靠 review / 后续 backlog，避免「顺手重构」违反抗熵增边界。
 
+## 补记：收口后迟到 L3 复审（R3 / R4，2026-11-14 凌晨）
+
+交付收口后，状态流转 subagent 在并发修改的工作区上持续复审，先后给出两批可复跑 BLOCKING。按「不因已标记完成就吞掉真实缺陷」原则，Lead 逐条复跑、最小修复并保留完整证据链：
+
+- R3：跨会话迟到写/GET 响应、编辑与删除确认互斥、E/D/G 分支吞编辑态、其它确认模态被抢键、连击双写、确认期间 goal 被外部改写的 TOCTOU。修复为 `sid+cwd` 守卫、`goalActionInFlight`、浮层层级/互斥、确认优先级、编辑/删除 ref 快照与自动取消；审查员原 playwright-core TOCTOU 反例重跑 `postedAction=null`、exit 0。
+- R4：在途旧 stats 回包迟到回填 rev1、写 XHR 异常不释放 in-flight 锁、`selectSession()` 遗留浮层/确认态。修复为 `goalStatsSeq` 最新回包序号、`x.timeout=10000` + `ontimeout/onerror/onabort`、`selectSession` 清理并递增序号；C7/C8/C9 原反例全部 exit 0。
+- R5：两并发 `refreshGoalRing()` GET 乱序时，clear 后迟到的真实 rev1 响应复活 `goalState`/红圈；新增独立 `goalRingSeq` 只接受最新 GET，并在 clear/`clearGoalRing`/切会话时递增作废旧回包，原反例 exit 0。
+- 全量门禁在每批修复后重跑（ES5、冻结套件 13/13、unit 39/39、suite 7/7、fold 41、decoupling、backlog-gate、ci-verify 全 0），并补跑浏览器 E2E Console Error = 0。教训：**Join Barrier 与异步 subagent 生命周期必须解耦**——交付后仍可能收到高价值反例，收口流程要允许「已 complete 的 goal 不阻断 hotfix 提交」，同时禁止用旧 PASS 覆盖新 FAIL。
+
 ## 物理收据索引（B023）
 
 - 契约/ADR：`.agents/notes/implemented/feature/2026-11-13-ctrl-o-goal-actions.md`
 - 红相冻结：`584f1d0`；实现收口：`b95664e`
 - 验收：`tests/acceptance/goal-actions.mjs`、`red-goal-actions.log`、`green-goal-actions.log`、`RED-PHASE.md §13`
-- 审查：`review-plan-b023.json`、`review-l3a-b023.json`、`review-l3a-b023-r2.json`、`review-l3b-b023.json`
+- 审查：`review-plan-b023.json`、`review-l3a-b023.json`、`review-l3a-b023-r2.json`、`review-l3a-b023-r3.json`、`review-l3a-b023-r4.json`、`review-l3a-b023-r5.json`、`review-l3b-b023.json`（final PASS）
 - 浏览器截图：`docs/release/evidence/b023-goal-actions/o-panel-actions.png`、`o-panel-final.png`
 - 闭环：`backlog/tasks.jsonl` → `backlog/archive/tasks-2026.jsonl`（`backlog:B023`）

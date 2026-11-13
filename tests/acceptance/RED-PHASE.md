@@ -774,19 +774,41 @@ node tests/acceptance/adversarial/preview-policy-attack.mjs    # → exit 1（12
 | `tests/acceptance/artifacts/red-goal-actions.log` | `d43620fea521696cd7d1120f326ddde3418fd23008e530ab1d1a1f1c2130262c`（`EXIT=1`） |
 | `tests/acceptance/artifacts/green-goal-actions.log` | `485fcc02d3575839f5d37f57d69f4d646fe323951bb82085bb8edeeac5c4611a`（`EXIT=0`） |
 | `docs/release/evidence/b023-goal-actions/o-panel-actions.png` | `4b7e0dbfb4c299cd3b533889bc6e14c26d310a0cb7bea83945029874056cb391` |
-| `docs/release/evidence/b023-goal-actions/o-panel-final.png` | `fedd7ff66f2d8a28efe46c87f8951a502fc9125ff770aaf4992bc2553b4884fe` |
+| `docs/release/evidence/b023-goal-actions/o-panel-final.png` | `6cde986cff36bfa6739e511c2c9807eabb6fe2885c637d545ff4437f7a92c4c5` |
 
 ### 13.1 浏览器 E2E 物理收据（agent-browser，隔离 mock 实例）
 
 - 环境：`Q20_MOCK_HOST=1` + `Q20_MOCK_HOST_GOAL`（临时 DSH_HOME/工作区根，零真实宿主/零 LLM），隔离端口 `127.0.0.1:41105`，`/healthz` 200。
 - 核心旅程：裸 `O` 打开会话状态面板 → `E` 行内编辑保存 → `G` 继续（phase 变「进行中」）→ `D` 打开删除确认 → `X` 取消（GET goal 仍存在、revision 未变）→ `D` + `Enter` 确认删除（面板「无」、GET goal `null`）。
 - 硬断言：浏览器 Console Error = **0**；关键完成态截图入仓 `docs/release/evidence/b023-goal-actions/o-panel-actions.png`（三按钮可见）与 `o-panel-final.png`（删除后无目标）；临时服务与浏览器会话已回收。
-- 覆盖边界：`GOAL_STALE_REVISION`、400 畸形 payload、宿主不可达 502 由冻结套件机器断言；真实断网 502/500 按契约标 `[UNVERIFIED]` 靠 review。
+- 覆盖边界：冻结套件机器断言 `GOAL_STALE_REVISION` 与 400 畸形 payload；宿主不可达 502/真实断网 500 **不在冻结套件内**，由 L3b 安全/协议审查的真实/隔离宿主探针覆盖，契约标 `[UNVERIFIED]` 的仅真实生产断网路径靠 review。
 
 ### 13.2 L3 靶向审查与修复复核
 
-- 审查收据：`.dev-team/review-l3a-b023.json`（状态流转，verdict FAIL，1 BLOCKING + 6 ADVISORY）、`.dev-team/review-l3a-b023-r2.json`（修复复核，verdict PASS）、`.dev-team/review-l3b-b023.json`（安全/协议一致性，上游审查服务 503 → `DEGRADED`，由 Lead 依据 Explorer wire 证据 + 宿主 RPC 实测探针 + 冻结套件复核，不冒充独立放行）。四份收据均经 `dev-review-lint.py` exit 0。
+- 审查收据：`.dev-team/review-l3a-b023.json`（状态流转，verdict FAIL，1 BLOCKING + 6 ADVISORY）、`.dev-team/review-l3a-b023-r2.json`（修复复核，verdict PASS）、`.dev-team/review-l3b-b023.json`（安全/协议一致性，迟到但最终独立 subagent 落盘 verdict PASS，`attestation.self_signed=false`；此前曾短暂登记 `DEGRADED`，已由最终收据取代）。全部收据均经 `dev-review-lint.py` exit 0；后续 R3/R4 复审见 §13.3/§13.4。
 - BLOCKING 根因：`goalActionRequest()` 写成功后 `loadSessionStats()` 会回拉尚未落盘的本地转录旧 CAS ref，覆盖刚确认的新 revision；连续动作必撞 `GOAL_STALE_REVISION`。
 - 修复：`mergeGoalWithConfirmed()` + `goalConfirmedGoal` / `goalConfirmedClearedId` 守卫，stats 回拉与 GET 真源共用同一合并口径；GET 追上/新 goal/clear 自动收口，`clearGoalRing()` 切会话清空。
 - 复核机器证据：审查员原静态 `counterexample_cmd` 重跑 exit 0；隔离 mock 端到端「edit → 立即 GET stats → 用返回 ref 发第二个 resume」返回 `ok:true` 且无 stale；冻结套件 13/13 PASS、ES5 acorn exit 0、unit 39/39、suite 7/7。
 - 6 条 ADVISORY（连击 in-flight guard、跨会话回调守卫、确认模态 ref 快照、`isGoalEditOpen` 未读、Esc 提示、写路径 zstd fold）本轮不修，登记为靠 review / 后续 backlog，未扩大改动范围。
+
+### 13.3 迟到 L3 复审（R3）与最小修复
+
+- 收口后迟到的状态流转审查给出 6 个可复跑 BLOCKING + 1 ADVISORY；Lead 逐条复跑确认全部真实后，仅改 `static/index.html` 做最小修复：
+  ① `goalActionRequest` / `refreshGoalRing` 增加 `sid+cwd` 迟到响应守卫；② 新增 `goalActionInFlight` 连击守卫；③ `goal-edit-box` z-index 降到确认层之下，删除确认打开时关闭编辑态；④ E/D/G 分支排斥编辑态/确认态/其它确认模态/在途写；⑤ 删除确认分支让位于 perm/file/archive/ws-remove 既有确认模态；⑥ `goalEditSnapshot` / `goalClearSnapshot` 冻结打开时 ref，确认期间 `goalForPanelGlobal` 变化即取消并提示重开，绝不拿新 ref 替用户确认。
+- 收据：`.dev-team/review-l3a-b023-r3.json`（verdict PASS，`dev-review-lint.py` exit 0）；原 `review-l3a-b023.json` FAIL 与 `review-l3a-b023-r2.json` PASS 保留，形成完整 FAIL → R2 → R3 证据链。
+- 复核机器证据：C1–C4/C6 静态反例与修正版 C5 均 exit 0；UI 连击守卫断言 `XHR_SEND_COUNT=1`；快照守卫断言 `POST_COUNT=0` 且自动取消；审查员给出的 playwright-core 延迟 stats TOCTOU 原反例重跑 `PASS confirm TOCTOU`（`postedAction=null`, exit 0）。
+- 修复后全量门禁复跑：ES5 acorn / `node --check` / 冻结验收 13/13 / unit 39/39 / suite 7/7 / fold 41 / decoupling / backlog-gate / ci-verify 全部 exit 0。
+
+### 13.4 L3 复审 R4（迟到 stats / XHR 锁 / 切会话清理）
+
+- 收据：`.dev-team/review-l3a-b023-r4.json`（verdict PASS，`dev-review-lint.py` exit 0）；证据链保留 `review-l3a-b023.json` FAIL → `r2` PASS → `r3` PASS → `r4` PASS，反映审查期间工作区并发演进的真实过程。
+- 三个 BLOCKING 反例复跑前均 exit 1：① 旧 stats 回包迟到把面板 ref 回填 rev1；② 写 XHR 无 `timeout/ontimeout/onerror/onabort`，异常时 `goalActionInFlight` 永不释放；③ `selectSession()` 未清理 goal 确认/编辑浮层与确认态。
+- 最小修复：`loadSessionStats()` 增加 `goalStatsSeq` 单调序号只接受最新回包；`goalActionRequest()` 设置 `x.timeout=10000` 与三个异常/中止回调释放锁并反馈；`selectSession()` 关闭两个浮层、清 `goalForPanelGlobal`、递增序号。
+- 复核：C7/C8/C9 原反例重跑均 exit 0（C7 输出 `STALE_STATS_BACKFILL_REF=2 NEXT_WRITE_REF=2 VULNERABLE=false`）；全量门禁再次 exit 0。
+
+### 13.5 L3 复审 R5（迟到 GET 复活红圈）
+
+- 收据：`.dev-team/review-l3a-b023-r5.json`（verdict PASS，`dev-review-lint.py` exit 0）。
+- BLOCKING 反例（playwright-core，仅延迟第 1 个 `/api/session/goal` 回包、不改写 body）：clear 成功后迟到的真实 rev1 GET 曾把 `goalState` 与 `composerTriggerBtn.goal-active` 复活，而宿主 `goal=null`、面板「无」，exit 1。
+- 最小修复：新增独立 `goalRingSeq`，`refreshGoalRing()` 每次 GET 递增并只接受最新回包；clear 成功、`clearGoalRing()`、`selectSession()` 均递增作废旧 GET。
+- 复核：审查员原反例重跑输出 `client.goalState=null`、`ringClass=""`、`hostGoal=null`，`PASS / exit 0`；R1–R4 反例保持 exit 0；浏览器核心旅程重跑（E 修改 → G 继续 → D 取消 → D+Enter 删除）Console Error = 0，删除后 `GET goal=null`；全量门禁再次全 0。

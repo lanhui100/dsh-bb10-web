@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "verdict": "PASS",
+  "audited_scopes": [
+    "server.mjs",
+    "static/index.html",
+    "README.md",
+    "tests/acceptance/RED-PHASE.md",
+    "tests/acceptance/goal-actions.mjs"
+  ],
+  "findings": [],
+  "reviewer": {
+    "kind": "subagent",
+    "session_id": "2e6ddfa6-0605-4175-82ed-860b1d8f5f9e",
+    "fresh_context": true
+  },
+  "executed_by": "lead-r3-verification",
+  "reviewed_commit": "584f1d0653a8b86a7c667c5120c9257e102f5a48",
+  "attestation": {
+    "self_signed": false,
+    "degraded": true,
+    "reason": "迟到 L3 审查给出 6 个可复跑 BLOCKING（跨会话回调、编辑/确认互斥、键盘优先级、连击、确认 TOCTOU、归档确认抢键）与 1 个 ADVISORY。Lead 按反例逐条最小修复后复跑：C1-C4/C6 静态反例及修正版 C5 均 exit 0；UI in-flight guard 证明连击仅 1 次 XHR；snapshot guard 证明确认期间 goal 变更时零 POST 并自动取消；playwright-core 延迟 stats 的 TOCTOU 原反例 exit 0（postedAction=null）。本收据记录 R3 复核，原 L3a FAIL 与 R2 PASS 收据保留，不冒充独立重审。"
+  }
+}

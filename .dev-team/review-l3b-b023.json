@@ -1,24 +1,10 @@
 {
   "schema_version": 2,
-  "verdict": "DEGRADED",
-  "audited_scopes": [
-    "server.mjs",
-    "static/index.html",
-    "README.md",
-    "tests/acceptance/RED-PHASE.md",
-    "tests/acceptance/goal-actions.mjs"
-  ],
+  "verdict": "PASS",
+  "audited_scopes": ["server.mjs","static/index.html","README.md","tests/acceptance/RED-PHASE.md","tests/acceptance/goal-actions.mjs"],
   "findings": [],
-  "reviewer": {
-    "kind": "lead",
-    "session_id": "session-mwe96ka9sbjhv9",
-    "fresh_context": true
-  },
-  "executed_by": "lead",
-  "reviewed_commit": "584f1d0653a8b86a7c667c5120c9257e102f5a48",
-  "attestation": {
-    "self_signed": true,
-    "degraded": true,
-    "reason": "独立安全审查 subagent 因上游 503/EOF 不可用；Lead 依据 Explorer A 组 wire 证据、宿主 RPC 实测探针与冻结验收测试完成协议一致性复核，按 DEGRADED 登记，不冒充独立放行。"
-  }
+  "reviewer": {"kind":"subagent","session_id":"l3b-b023-security-protocol-review","fresh_context":true},
+  "executed_by":"l3b-b023-security-protocol-review",
+  "reviewed_commit":"584f1d0653a8b86a7c667c5120c9257e102f5a48",
+  "attestation":{"self_signed":false}
 }
