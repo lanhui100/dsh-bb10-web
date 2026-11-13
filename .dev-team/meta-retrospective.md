@@ -350,3 +350,47 @@ denylist 降为叠加防御。这既闭合凭据面，又精确匹配用户诉�
 对应审查收据：`.dev-team/review-plan.json`、`review-l3a-preview.json`、`review-l3b-preview.json`、
 `review-l3p-preview.json`、`review-plan-r4.json`、`review-l3b-preview-r4.json`、
 `review-plan-r8.json`、`review-l3b-preview-r8.json`。
+
+---
+
+# Meta Retrospective — backlog:B023 O 面板 Goal 动作 (2026-11-13/14)
+
+## 一、通信拓扑与信噪比 (Topology & Noise)
+
+- 团队按 Lead + Protocol Agent + Test Agent + Executor 的常驻名册分工，Explorer/L3 审查由 Subagent 池承担；写域严格正交：Protocol 只落冻结契约（后由 Lead 收口为 ADR），Test Agent 独占 `tests/acceptance/goal-actions.mjs`，Executor 独占 `server.mjs`/`static/index.html`/`README.md`，Lead 统一门禁与提交。
+- 契约单向门有效：Test Agent 的 8 个机器可判定歧义点与 Protocol Agent 的 7 处复核偏差全部由 Lead 一票裁决后原地改写冻结契约，没有出现「实现改测试」或「测试迁就实现」。
+- 信噪比教训：Protocol Agent 在只读侦察阶段停留过久、Test Agent 等待冻结通知过久，两轮共消耗约 30 分钟墙钟；Lead 最终直接落盘契约并冻结测试。后续应在首个决策点后给 Protocol/Test 明确「落盘倒计时」或由 Lead 代理短契约落盘。
+- Explorer 结果回报较晚但关键事实有效：`goals/clear` 宿主返回 tombstone `GoalRef` 而非 null，促成代理层显式映射 `goal:null`；该迟到证据应前置到契约冻结前。
+
+## 二、门禁穿透与误杀率 (Gate Penetration / False Negatives & Positives)
+
+- 红相真实：`node tests/acceptance/goal-actions.mjs` 在实现前 exit 1（13/13 FAIL，405 + 静态锚点缺失），冻结于 `584f1d0`；绿相 13/13 PASS，日志 `red-goal-actions.log`/`green-goal-actions.log` 入仓。
+- 机器门禁全绿：ES5 acorn、`node --check server.mjs`、`test-decoupling.mjs`、`test-unit.mjs`(39/39)、`test-suite.mjs`(7/7)、`test-fold-smoke.cjs`(41)、`backlog-gate.sh`、`backlog-gate.spec.sh`、`ci-verify.sh`、`verify-note.sh` 均 exit 0。
+- **门禁穿透（自曝 1）**：冻结套件只覆盖 HTTP 端点与静态锚点，浏览器 E2E 才暴露两个真实闭环缺陷：① mock 接缝未覆盖 `stats.goal`，O 面板显示「无目标」；② 写成功后 `loadSessionStats()` 用未落盘的旧转录覆盖新 CAS ref，连续动作必撞 `GOAL_STALE_REVISION`。二者均靠 agent-browser 真实旅程抓到，说明「HTTP 绿 + 静态接线绿」不足以证明 UI 状态闭环。
+- **L3 靶向审查命中**：状态流转视角给出 1 个可复跑 BLOCKING（同上的 CAS 旧值回填）+ 6 条 ADVISORY；修复后原 counterexample 重跑 exit 0 并落 `review-l3a-b023-r2.json`，6 条 ADVISORY 靠 review / 后续 backlog，未借机扩大改动。
+- 安全/协议一致性独立审查 subagent 因上游 503/EOF 不可用，`review-l3b-b023.json` 如实登记 `DEGRADED`，由 Lead 依据 Explorer wire 证据、宿主 RPC 实测探针与冻结套件复核，不冒充独立放行。这是门禁诚实边界而非假绿。
+- 浏览器硬断言：Console Error = 0；`o-panel-actions.png`（三按钮）与 `o-panel-final.png`（删除后无目标）入仓；临时 mock 服务、端口与浏览器会话全部回收。
+
+## 三、分工契约与隔离有效性 (Contract Isolation)
+
+- 测试分权成立：Executor 全程未改冻结测试，Test Agent 未写业务代码；红相锚定提交与实现提交分离（`584f1d0` → `b95664e`），便于冷启动按提交恢复。
+- 写域审计有效：最终提交仅 13 个声明文件，`git status --porcelain` 空；pre-commit 的 secret-scan、backlog-gate、ADR 格式门均真实执行且 exit 0。
+- 断点续做有效：会话跨 14 小时恢复后，`get_goal`/`update_goal resume` + 红相 commit + 工作区 diff 足以恢复现场，Executor 从 `server.mjs` 半成品继续补齐前端，未重建任务板或 plan 文件。
+- 可观测性动线判定：本变更触及 HTTP/UI，但仓库无 `docs/observability.yaml`，`audit-diff.sh --base 584f1d0` 返回 exit 4「找不到声明文件」；按 skill 诚实条款记为「不适用（声明缺失）」而非通过，需后续独立接入，不在本任务范围补声明。
+
+## 四、元协议迭代建议 (Self-Evolving Protocol)
+
+1. 前端状态闭环类变更，验收套件必须追加「写成功后立即回拉 stats 并用返回 ref 发第二次写」的时序断言，不能只断言端点与静态锚点。
+2. 浏览器 E2E 应在 Executor 首轮自检后、Join Barrier 前执行，避免把 UI 状态缺陷拖到最终收口才发现。
+3. Protocol Agent / Test Agent 需设「无新增证据即落盘」的硬截止；Lead 应准备短契约模板，避免团队空转。
+4. 上游审查服务不可用时，L3 收据必须 `DEGRADED` + 明确替代证据链，禁止用 Lead 自签 PASS 冒充独立审查。
+5. 6 条 ADVISORY（连击 in-flight guard、跨会话回调守卫、确认模态 ref 快照、Esc 提示、写路径 zstd fold 等）统一登记为靠 review / 后续 backlog，避免「顺手重构」违反抗熵增边界。
+
+## 物理收据索引（B023）
+
+- 契约/ADR：`.agents/notes/implemented/feature/2026-11-13-ctrl-o-goal-actions.md`
+- 红相冻结：`584f1d0`；实现收口：`b95664e`
+- 验收：`tests/acceptance/goal-actions.mjs`、`red-goal-actions.log`、`green-goal-actions.log`、`RED-PHASE.md §13`
+- 审查：`review-plan-b023.json`、`review-l3a-b023.json`、`review-l3a-b023-r2.json`、`review-l3b-b023.json`
+- 浏览器截图：`docs/release/evidence/b023-goal-actions/o-panel-actions.png`、`o-panel-final.png`
+- 闭环：`backlog/tasks.jsonl` → `backlog/archive/tasks-2026.jsonl`（`backlog:B023`）
