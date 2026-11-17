@@ -2132,6 +2132,97 @@
       -webkit-tap-highlight-color: rgba(0,0,0,0);
     }
     .q-pager-btn.q-disabled { color: #555555 !important; }
+    /* ==== 越界操作授权面板（dsh web ui-approval ApprovalPanel 同构） ====
+       非完全权限（read-only / workspace-write）下模型请求越界操作（sandbox 提权）时，
+       宿主 approval/request waterfall 在 Q20 弹出单卡审批：允许一次 / 拒绝。
+       720x720 全屏遮罩 + 居中高对比卡片，触控与物理键盘双通道（Enter 允许 / X 拒绝）。 */
+    #approval-panel {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0,0,0,0.72);
+      z-index: 106;
+      display: none;
+      -webkit-box-sizing: border-box;
+      box-sizing: border-box;
+    }
+    #approval-card {
+      position: absolute;
+      left: 14px;
+      right: 14px;
+      top: 50%;
+      margin-top: -110px;
+      background: #1E1E1E;
+      border: 1px solid #3C3C3C;
+      border-radius: 6px;
+      padding: 0 0 46px 0;
+      -webkit-box-sizing: border-box;
+      box-sizing: border-box;
+    }
+    #approval-head {
+      height: 30px;
+      line-height: 30px;
+      padding: 0 10px;
+      border-bottom: 1px solid #333333;
+      color: #FFB74D;
+      font-size: 13px;
+      font-weight: bold;
+    }
+    #approval-body {
+      max-height: 150px;
+      overflow-y: scroll;
+      -webkit-overflow-scrolling: touch;
+      padding: 8px 10px;
+      -webkit-box-sizing: border-box;
+      box-sizing: border-box;
+    }
+    #approval-reason {
+      color: #FFFFFF;
+      font-size: 13px;
+      line-height: 1.45;
+      word-wrap: break-word;
+    }
+    #approval-meta {
+      margin-top: 6px;
+      color: #9E9E9E;
+      font-size: 11px;
+      word-wrap: break-word;
+    }
+    #approval-feedback {
+      margin-top: 6px;
+      color: #FF5252;
+      font-size: 11px;
+      line-height: 1.4;
+      display: none;
+      word-wrap: break-word;
+    }
+    #approval-foot {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 40px;
+      border-top: 1px solid #333333;
+    }
+    .ap-btn {
+      position: absolute;
+      bottom: 6px;
+      height: 28px;
+      line-height: 26px;
+      padding: 0 12px;
+      font-size: 12px;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: rgba(0,0,0,0);
+    }
+    .ap-btn:active { opacity: 0.85; }
+    .ap-btn-primary { right: 8px; background: #00897B; color: #FFFFFF; border: 1px solid #00695C; }
+    .ap-btn-ghost { left: 8px; background: #333333; color: #E0E0E0; border: 1px solid #555555; }
+    .ap-btn.ap-disabled { opacity: 0.5; }
+
     /* 已结算的 ask_user_question 回执卡（工具胶囊内的极简问答清单） */
     .ask-card {
       margin: 2px 0 3px 8px;
@@ -2517,6 +2608,22 @@
         <span id="question-pager-next" class="q-pager-btn">›</span>
       </div>
       <div id="question-primary-btn" class="q-btn q-btn-primary">下一题</div>
+    </div>
+  </div>
+
+  <!-- 越界操作授权面板（approval/request）：720x720 模态单卡 + Enter 允许 / X 拒绝 -->
+  <div id="approval-panel">
+    <div id="approval-card">
+      <div id="approval-head">⚠ 需要授权</div>
+      <div id="approval-body">
+        <div id="approval-reason"></div>
+        <div id="approval-meta"></div>
+        <div id="approval-feedback"></div>
+      </div>
+      <div id="approval-foot">
+        <div id="approval-reject-btn" class="ap-btn ap-btn-ghost">拒绝 [X]</div>
+        <div id="approval-allow-btn" class="ap-btn ap-btn-primary">允许一次 [Enter]</div>
+      </div>
     </div>
   </div>
 
@@ -3278,6 +3385,11 @@
       // 1. 本地主动提问作答态（优先级最高，对齐 dsh web pendingInteraction > running）；
       // 面板被右上 ✕ 收起后挂起仍在，等待态保持（可点击尾部状态条重开）
       if (sid && typeof questionState !== 'undefined' && questionState && questionState.questions && questionState.questions.length && (questionState.visible || questionState.dismissed) && (!questionState.sessionId || questionState.sessionId === sid)) {
+        return { isRunning: true, phase: 'waiting' };
+      }
+
+      // 1b. 本地越界操作授权态（同属 pendingInteraction，优先级同提问）
+      if (sid && typeof approvalState !== 'undefined' && approvalState && approvalState.visible && (!approvalState.sessionId || approvalState.sessionId === sid)) {
         return { isRunning: true, phase: 'waiting' };
       }
 
@@ -5178,6 +5290,256 @@
       qGoNext();
     };
 
+    /* ==================================================================
+       越界操作授权面板（dsh web ui-approval ApprovalPanel 同构）
+       宿主 approval/request waterfall → Q20 SSE 'approval' 事件 → 单卡审批
+       → POST /api/session/approval → 宿主 $events/result 回填。
+       仅两种决策：允许一次（allowed-once，绝不永久放行）/ 拒绝（rejected，fail-closed）。
+       ================================================================== */
+    var approvalPanel = document.getElementById('approval-panel');
+    var approvalReasonEl = document.getElementById('approval-reason');
+    var approvalMetaEl = document.getElementById('approval-meta');
+    var approvalFeedbackEl = document.getElementById('approval-feedback');
+    var approvalAllowBtn = document.getElementById('approval-allow-btn');
+    var approvalRejectBtn = document.getElementById('approval-reject-btn');
+
+    var approvalState = { sessionId: '', eventId: '', toolName: '', callId: '', reason: '', visible: false, busy: false };
+
+    /** 授权文案纯逻辑：displayReason.zh → .en → reason → dsh 兜底句式（可测，无 DOM 依赖）。 */
+    /* @Q20-APPROVAL-PURE-START */
+    function resolveApprovalReason(data) {
+      var d = (data && typeof data === 'object') ? data : {};
+      var dr = (d.displayReason && typeof d.displayReason === 'object') ? d.displayReason : null;
+      var text = '';
+      if (dr && typeof dr.zh === 'string' && dr.zh.replace(/^\s+|\s+$/g, '') !== '') text = dr.zh;
+      else if (dr && typeof dr.en === 'string' && dr.en.replace(/^\s+|\s+$/g, '') !== '') text = dr.en;
+      else if (typeof d.reason === 'string' && d.reason.replace(/^\s+|\s+$/g, '') !== '') text = d.reason;
+      if (text.replace(/^\s+|\s+$/g, '') !== '') return text.replace(/^\s+|\s+$/g, '');
+      var tool = (typeof d.toolName === 'string' && d.toolName) ? d.toolName : '未知工具';
+      return '工具 ' + tool + ' 请求越权执行';
+    }
+
+    /** 授权挂起可呈现性校验：eventId 与 toolName 必需（缺一即畸形帧，绝不弹窗）。 */
+    function validateApprovalRequest(data) {
+      if (!data || typeof data !== 'object') return null;
+      if (typeof data.eventId !== 'string' || !data.eventId) return null;
+      if (typeof data.toolName !== 'string' || !data.toolName) return null;
+      return {
+        sessionId: (typeof data.sessionId === 'string') ? data.sessionId : '',
+        eventId: data.eventId,
+        toolName: data.toolName,
+        callId: (typeof data.callId === 'string') ? data.callId : '',
+        reason: resolveApprovalReason(data)
+      };
+    }
+
+    /** no-pending / 结算失败等裸英文错误的中文口径（绝不把上游错误原文丢给用户）。 */
+    function approvalErrorText(err) {
+      var raw = (typeof err === 'string') ? err : ((err && err.error) || '');
+      if (raw.indexOf('no pending approval') >= 0) return '授权请求已失效（会话已继续或服务已重启）';
+      if (raw.indexOf('settle') >= 0) return '授权提交失败，请重试';
+      return raw ? '授权提交失败：' + raw : '授权提交失败，请重试';
+    }
+    /* @Q20-APPROVAL-PURE-END */
+
+    function setApprovalButtonsDisabled(disabled) {
+      if (approvalAllowBtn) approvalAllowBtn.className = 'ap-btn ap-btn-primary' + (disabled ? ' ap-disabled' : '');
+      if (approvalRejectBtn) approvalRejectBtn.className = 'ap-btn ap-btn-ghost' + (disabled ? ' ap-disabled' : '');
+    }
+
+    function showApprovalFeedback(text) {
+      if (!approvalFeedbackEl) return;
+      if (!text) {
+        approvalFeedbackEl.style.display = 'none';
+        approvalFeedbackEl.innerHTML = '';
+        return;
+      }
+      approvalFeedbackEl.style.display = 'block';
+      approvalFeedbackEl.innerHTML = escapeHtml(text);
+    }
+
+    function hideApprovalPanel() {
+      if (!approvalState) return; // 启动期早于状态初始化（var 提升）时安全 no-op
+      approvalState.sessionId = '';
+      approvalState.eventId = '';
+      approvalState.toolName = '';
+      approvalState.callId = '';
+      approvalState.reason = '';
+      approvalState.visible = false;
+      approvalState.busy = false;
+      if (approvalPanel) approvalPanel.style.display = 'none';
+      setApprovalButtonsDisabled(false);
+      showApprovalFeedback('');
+    }
+
+    /** 新授权询问到达（SSE 'approval' request）：单卡呈现；跨会话只标黄 + 横幅，不打断当前会话。 */
+    function showApprovalPanel(data) {
+      var req = validateApprovalRequest(data);
+      if (!req) return;
+      var targetSid = req.sessionId || currentSessionId || '';
+      if (targetSid && currentSessionId && targetSid !== currentSessionId) {
+        try {
+          if (typeof sessCache !== 'undefined' && sessCache[getCwd()]) {
+            var apList = sessCache[getCwd()];
+            for (var ai = 0; ai < apList.length; ai++) {
+              if (apList[ai] && apList[ai].id === targetSid) { apList[ai].isRunning = true; apList[ai].state = 'waiting'; break; }
+            }
+          }
+          if (typeof knownSessionsMap !== 'undefined' && knownSessionsMap[targetSid]) {
+            knownSessionsMap[targetSid].isRunning = true;
+            knownSessionsMap[targetSid].state = 'waiting';
+          }
+          if (typeof bannerNotifications !== 'undefined') {
+            var dupFound = false;
+            for (var bi = 0; bi < bannerNotifications.length; bi++) {
+              if (bannerNotifications[bi].id === targetSid && bannerNotifications[bi].kind === 'approval' && bannerNotifications[bi].eventId === req.eventId) { dupFound = true; break; }
+            }
+            if (!dupFound) {
+              bannerNotifications.unshift({ id: targetSid, cwd: getCwd(), state: 'waiting', kind: 'approval', eventId: req.eventId, summary: '有待审批的越权操作，点击进入', title: '有待审批的越权操作', time: (new Date()).getTime() });
+            }
+            if (typeof renderBannerNotifications === 'function') renderBannerNotifications();
+          }
+          if (typeof renderSessTree === 'function' && typeof isSessOpen !== 'undefined' && isSessOpen) renderSessTree(true);
+        } catch (eCross) {}
+        if (typeof showCopyToast === 'function') showCopyToast('另一会话有待审批操作，已标黄，可稍后前往');
+        return;
+      }
+      if (approvalState.busy) return; // 提交在途：忽略迟到/重复的新请求帧
+      if (approvalState.visible && approvalState.eventId === req.eventId) return;
+      approvalState.sessionId = targetSid;
+      approvalState.eventId = req.eventId;
+      approvalState.toolName = req.toolName;
+      approvalState.callId = req.callId;
+      approvalState.reason = req.reason;
+      approvalState.visible = true;
+      approvalState.busy = false;
+      if (approvalReasonEl) approvalReasonEl.innerHTML = escapeHtml(req.reason);
+      if (approvalMetaEl) approvalMetaEl.innerHTML = escapeHtml('工具: ' + req.toolName);
+      showApprovalFeedback('');
+      setApprovalButtonsDisabled(false);
+      // 焦点让位：授权是模态人工闸门，对话框若仍持有焦点会让 Enter 发送消息而不是决策。
+      try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (eBlur) {}
+      if (approvalPanel) approvalPanel.style.display = 'block';
+      syncSessionPhase(targetSid, 'waiting', '⚠ 等待授权：允许后方可继续');
+    }
+
+    /** 提交授权决策：allow → allowed-once；reject → rejected（fail-closed）。 */
+    function submitApproval(action) {
+      if (approvalState.busy || !approvalState.eventId) return;
+      if (action !== 'allow' && action !== 'reject') return;
+      approvalState.busy = true;
+      setApprovalButtonsDisabled(true);
+      showApprovalFeedback('');
+      var targetSid = approvalState.sessionId || currentSessionId || '';
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/session/approval', true);
+      xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState !== 4) return;
+        var status = 0;
+        try { status = xhr.status; } catch (e) {}
+        var res = null;
+        try { res = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+        if ((status === 200 || status === 0) && res && res.ok) {
+          hideApprovalPanel();
+          if (action === 'allow') {
+            showCopyToast('已允许本次操作');
+            syncSessionPhase(targetSid, 'running', '已允许本次操作，对话继续中');
+          } else {
+            showCopyToast('已拒绝本次操作');
+            syncSessionPhase(targetSid, 'running', '已拒绝本次操作，对话继续中');
+          }
+          // 授权后若本地无在途流，无缝挂载以接收后续回复（与提问提交同口径）
+          if (targetSid && !attachXhr && !activeXhr && !isStreaming) {
+            sessState.running = true;
+            sessState.phase = 'running';
+            renderSendButton();
+            attachSession(getCwd(), targetSid);
+          }
+          return;
+        }
+        approvalState.busy = false;
+        setApprovalButtonsDisabled(false);
+        var msg = approvalErrorText((res && (res.error || res.code)) || ('HTTP ' + status));
+        if (msg.indexOf('已失效') >= 0) {
+          hideApprovalPanel();
+          showCopyToast('授权已失效');
+          return;
+        }
+        showApprovalFeedback(msg);
+      };
+      xhr.send(JSON.stringify({ sessionId: targetSid, eventId: approvalState.eventId, action: action }));
+    }
+
+    /** 移除指定会话+eventId 的授权横幅（其他事件不误删）。 */
+    function removeApprovalBanner(sid, eventId) {
+      if (typeof bannerNotifications === 'undefined') return false;
+      var removed = false;
+      for (var rbi = bannerNotifications.length - 1; rbi >= 0; rbi--) {
+        var rItem = bannerNotifications[rbi];
+        if (rItem && rItem.id === sid && rItem.kind === 'approval' && (!eventId || !rItem.eventId || rItem.eventId === eventId)) {
+          bannerNotifications.splice(rbi, 1);
+          removed = true;
+        }
+      }
+      if (removed && typeof renderBannerNotifications === 'function') renderBannerNotifications();
+      return removed;
+    }
+
+    /** SSE 'approval' 事件分发（attach 重放与实时流共用）。 */
+    function handleApprovalEvent(data) {
+      if (!data || !data.type) return;
+      if (data.type === 'request') {
+        showApprovalPanel(data);
+        return;
+      }
+      if (data.type !== 'allowed' && data.type !== 'rejected' && data.type !== 'cancelled') return;
+      var termSid = (data && data.sessionId) || approvalState.sessionId || '';
+      var termEvt = (data && data.eventId) || '';
+      var isMine = !!termEvt && approvalState.eventId === termEvt
+        && (!approvalState.sessionId || !termSid || approvalState.sessionId === termSid);
+      if (isMine) {
+        hideApprovalPanel();
+        if (data.type === 'allowed') syncSessionPhase(termSid, 'running', '已允许本次操作，对话继续中');
+        else if (data.type === 'rejected') syncSessionPhase(termSid, 'running', '已拒绝本次操作，对话继续中');
+        else syncSessionPhase(termSid, 'running', '授权请求已撤回');
+      }
+      removeApprovalBanner(termSid, termEvt);
+      // 跨会话终态：仅复位缓存行的等待态，绝不触碰当前会话 sessState
+      if (termSid && termSid !== currentSessionId) {
+        try {
+          if (typeof sessCache !== 'undefined' && sessCache[getCwd()]) {
+            var cList = sessCache[getCwd()];
+            for (var ci = 0; ci < cList.length; ci++) {
+              if (cList[ci] && cList[ci].id === termSid && (cList[ci].state === 'waiting' || cList[ci].isRunning)) {
+                cList[ci].state = 'running';
+                cList[ci].isRunning = true;
+                break;
+              }
+            }
+          }
+          if (typeof knownSessionsMap !== 'undefined' && knownSessionsMap[termSid] && (knownSessionsMap[termSid].state === 'waiting' || knownSessionsMap[termSid].isRunning)) {
+            knownSessionsMap[termSid].state = 'running';
+            knownSessionsMap[termSid].isRunning = true;
+          }
+          if (typeof renderSessTree === 'function' && typeof isSessOpen !== 'undefined' && isSessOpen) renderSessTree(true);
+        } catch (eTerm) {}
+      }
+    }
+
+    if (approvalAllowBtn) {
+      approvalAllowBtn.onclick = function(e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        submitApproval('allow');
+      };
+    }
+    if (approvalRejectBtn) {
+      approvalRejectBtn.onclick = function(e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        submitApproval('reject');
+      };
+    }
+
     /* ---------------- ask_user_question 已结算回执卡 ---------------- */
 
     /** 解析工具调用参数中的问题清单（dsh questionEntries 同口径）。 */
@@ -5347,6 +5709,7 @@
       }
       stopAttach();
       hideQuestionPanel();
+      hideApprovalPanel();
       if (currentSessionId) {
         try {
           var cancelXhr = new XMLHttpRequest();
@@ -8183,6 +8546,7 @@
         activeXhr = null;
       }
       hideQuestionPanelKeepSlot();
+      hideApprovalPanel(); // 切会话/新建：授权卡片随挂起会话隐藏（宿主重推时再开）
       subagentParentSession = null;
       stopAttach();
       stopHistory(); // 归档/新建会话时一并中止在途历史加载，杜绝其状态冲刷欢迎页（与 selectSession 对称）
@@ -8234,6 +8598,7 @@
         activeXhr = null;
       }
       hideQuestionPanelKeepSlot();
+      hideApprovalPanel(); // 切会话/新建：授权卡片随挂起会话隐藏（宿主重推时再开）
       subagentParentSession = null;
       stopAttach();
       currentSessionId = '';
@@ -8291,6 +8656,7 @@
         activeXhr = null;
       }
       hideQuestionPanelKeepSlot();
+      hideApprovalPanel(); // 切会话/新建：授权卡片随挂起会话隐藏（宿主重推时再开）
       turnFillExhausted = false; // 切换会话后重新允许轮次对齐补齐
       stopAttach();
       stopHistory();
@@ -12151,6 +12517,9 @@
                   } else if (currentEvent === 'question') {
                     // ask_user_question 请求/终态（含 attach 重放缓冲）
                     handleQuestionEvent(data);
+                  } else if (currentEvent === 'approval') {
+                    // approval/request 请求/终态（越界操作授权，含 attach 重放缓冲）
+                    handleApprovalEvent(data);
                   } else if (currentEvent === 'delta' && data.text) {
                     attachHasRunning = true;
                     if (replayDone) {
@@ -12246,6 +12615,7 @@
                     syncSessionPhase(sid, 'done', '会话已完成');
                     notifySessionComplete(wsSelect.value, sid, 'done', '');
                     hideQuestionPanel();
+                    hideApprovalPanel();
                     clearQueueDock(sid);
                     stopAttach();
                     // 终态时挂载交付文件列表（若未被 loadHistory 整体重刷）
@@ -12264,6 +12634,7 @@
                     }
                     syncSessionPhase(sid, 'stopped', '会话已手动中止');
                     hideQuestionPanel();
+                    hideApprovalPanel();
                     clearQueueDock(sid);
                     stopAttach();
                     if (attachHasRunning && !userScrolledUp && currentSessionId === sid) {
@@ -12283,6 +12654,7 @@
                     syncSessionPhase(sid, 'error', aErrTitle);
                     notifySessionComplete(wsSelect.value, sid, 'error', aErrMsg);
                     hideQuestionPanel();
+                    hideApprovalPanel();
                     clearQueueDock(sid);
                     stopAttach();
                     if (typeof refreshGoalRing === 'function' && currentSessionId === sid) refreshGoalRing();
@@ -12307,7 +12679,7 @@
             } else if (aStatus === 200 || aStatus === 0) {
               // 正常 EOF 关闭（例如静态历史会话 attach 完成后服务端直接 res.end）
               if (sessState.running) {
-                var termP = (questionState && (questionState.visible || questionState.dismissed)) ? 'waiting' : (sessState.phase === 'running' ? 'done' : sessState.phase);
+                var termP = ((questionState && (questionState.visible || questionState.dismissed)) || (approvalState && approvalState.visible)) ? 'waiting' : (sessState.phase === 'running' ? 'done' : sessState.phase);
                 syncSessionPhase(sid, termP, termP === 'done' ? '会话已完成' : '');
                 if (typeof foldTrailingProcess === 'function') {
                   foldTrailingProcess(chatContainer);
@@ -13177,6 +13549,9 @@
                   } else if (eventType === 'question') {
                     // ask_user_question 请求/终态：弹出极简作答组件
                     handleQuestionEvent(data);
+                  } else if (eventType === 'approval') {
+                    // approval/request 请求/终态：弹出越界操作授权卡片
+                    handleApprovalEvent(data);
                   } else if (eventType === 'delta' && data.text) {
                     setStatus('正在生成回复...', 'running');
                     appendLiveTextSegment(data.text);
@@ -13220,6 +13595,7 @@
                     isStreaming = false;
                     syncSessionPhase(sendSid || currentSessionId, 'done', '会话已完成');
                     hideQuestionPanel();
+                    hideApprovalPanel();
                     flushRender(true);
                     if (fullAssistantText && fullAssistantText !== '...') {
                       var liveActBar = createMessageActions(fullAssistantText, null);
@@ -13248,6 +13624,7 @@
                     }
                     syncSessionPhase(cancelSid, 'stopped', '已手动停止');
                     hideQuestionPanel();
+                    hideApprovalPanel();
                     flushRender(true);
                     // 中断终态同样折叠本轮过程
                     finalizeLiveProcessOnce();
@@ -13261,6 +13638,7 @@
                     streamError = { title: '✖ ' + dshErrLabel(data.code), detail: errMsg };
                     syncSessionPhase(sendSid || currentSessionId, 'error', streamError.title);
                     hideQuestionPanel();
+                    hideApprovalPanel();
                     flushRender(true);
                     if (allMessages.length > 0) {
                       var lastM = allMessages[allMessages.length - 1];
@@ -13323,6 +13701,8 @@
                 syncSessionPhase(targetEndSid, 'stopped', '已手动停止');
               } else if (questionState && (questionState.visible || questionState.dismissed)) {
                 syncSessionPhase(targetEndSid, 'waiting', '❓ Agent 提问，请在下方作答');
+              } else if (approvalState && approvalState.visible) {
+                syncSessionPhase(targetEndSid, 'waiting', '⚠ 等待授权：允许后方可继续');
               } else {
                 syncSessionPhase(targetEndSid, 'done', '会话已完成');
               }
@@ -13331,7 +13711,7 @@
               // 终态后刷新 stats：上下文圆环分子（输入侧压力）随之更新
               try { if (typeof loadSessionStats === 'function') loadSessionStats(); } catch (eSE) {}
               // BB10 可能在 readyState 3 未完整派发末帧；正常 EOF 也必须收口过程节点。
-              if (streamError || stopRequested || !(questionState && (questionState.visible || questionState.dismissed))) {
+              if (streamError || stopRequested || !((questionState && (questionState.visible || questionState.dismissed)) || (approvalState && approvalState.visible))) {
                 finalizeLiveProcessOnce();
               }
             }
@@ -14010,6 +14390,22 @@
           closeFilePreview();
         }
         return false;
+      }
+
+      // 越界操作授权模态（approval/request）：Enter 允许一次 / X 拒绝（Esc 仅 PC 兜底）。
+      // 必须先于 Esc chain 与提问分支：授权是 fail-closed 的人工闸门，不能被其他快捷键旁路。
+      if (approvalState.visible) {
+        if (code === 13) {
+          if (e.preventDefault) e.preventDefault();
+          submitApproval('allow');
+          return false;
+        }
+        if (code === 88 || code === 27) {
+          if (e.preventDefault) e.preventDefault();
+          submitApproval('reject');
+          return false;
+        }
+        return false; // 授权未决时吞掉其他快捷键
       }
 
       // Esc chain: ws-remove > archive-confirm > ws-add > quick-msg-input > quick-msg > help > status > perm > model > sess > ws > question > composer > stream > msg-sel

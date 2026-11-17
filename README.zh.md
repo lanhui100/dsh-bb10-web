@@ -68,6 +68,7 @@
 - **配置自由**：通过环境变量 `DSH_ROOT` 指定外部底座路径，默认为 `../deepseek-harness`。
 - **官方归属与兜底逻辑**：DSH Web 宿主（3080 端口）在线时，对话经宿主 RPC 面（HTTP RPC 与 `/api/remote.mux` 流载体）驱动，工作区归属由宿主亲自写入；宿主不可达（连接拒绝、超时、502/503）时，才降级调用外部底座的 SDK 进程内引擎并直写 `workspace.json` 镜像兜底。
 - **会话运行状态真源**：运行态取自宿主转发的 `$events` 流（`api-session/status|added|removed|activity`），由 `lib/host-live-state.mjs` 折叠为进程内权威镜像；全量 `session/list` 仅作冷启动后台播种（单一在飞、长超时、失败绝不清空已知 running）。`GET /api/sessions/status?ids=…` 以同一口径从内存作答并显式给出 `known` 标志——消费方必须把 `known:false` 视为「无权威事实」且不得据此降级。父子关系尚未知时，子智能体看板回退到对单会话的定向 `session/projections` 读取。
+- **越界操作授权桥**：非完全权限预设（`read-only` / `workspace-write`）下，工作区外操作经宿主 `approval/request` 瀑布在 Q20 呈现单卡审批（允许一次 / 拒绝）。服务端只接管本会话帧（以 `$events/result` 结算 `allowed-once` / `rejected`），其他会话一律 `next` 委托，不可呈现载荷 fail-closed 结算 `unavailable`；挂起态统一报 `pendingInteraction: 'approval'`，`POST /api/session/approval` 是唯一回程，且不提供永久放行结局。
 - **机器门禁**：`node test-decoupling.mjs`（已接入 `pnpm test` 与 `test:all`）——校验宪法条款在场、无 submodule、无 vendored dsh，非零退出即失败。
 
 ---

@@ -11,6 +11,7 @@ import { createStreamFold } from './lib/stream-fold.mjs';
 import { createHostLiveState } from './lib/host-live-state.mjs';
 import { createSessionEventHandler as createSessionEventHandlerImpl } from './lib/session-events.mjs';
 import { classifyQuestionFrame } from './lib/ask-ownership.mjs';
+import { planApprovalWaterfall } from './lib/approval-bridge.mjs';
 import { hasPendingQuestionFromEvents } from './lib/session-waiting.mjs';
 import { applySubagentLite } from './lib/subagent-lite.mjs';
 import { mergeSubagentCatalog, pickAgentTeam } from './lib/agent-team-projection.mjs';
@@ -1772,6 +1773,9 @@ async function sessionStatusFact(sessionId) {
     if (sessionPendingQuestion(zstdPath, liveTask)) {
       return { isRunning: true, state: 'waiting', pendingInteraction: 'question', known: true, source: resolved.source || 'heuristic' };
     }
+    if (sessionPendingApproval(liveTask)) {
+      return { isRunning: true, state: 'waiting', pendingInteraction: 'approval', known: true, source: resolved.source || 'heuristic' };
+    }
     return { isRunning: true, state: 'running', known: true, source: resolved.source || 'heuristic' };
   }
   const authoritative = (resolved.source === 'live' || resolved.source === 'list' || resolved.source === 'task');
@@ -1855,7 +1859,12 @@ function validateAskAnswers(value) {
 
 /** 通过 $events/result RPC 结算一条 Remote waterfall（result / next / rejected）。 */
 function settleUserEvent(task, eventId, outcome) {
-  const clientId = (task.pendingQuestion && task.pendingQuestion.clientId) || task.eventsClientId || '';
+  const pendingQuestion = task.pendingQuestion;
+  const pendingApproval = task.pendingApproval;
+  const clientId = task.eventsClientId
+    || (pendingQuestion && pendingQuestion.clientId)
+    || (pendingApproval && pendingApproval.clientId)
+    || '';
   if (!clientId || !eventId) {
     return Promise.resolve({ ok: false, error: 'missing $events clientId/eventId' });
   }
@@ -1868,6 +1877,30 @@ function clearTaskPendingQuestion(task, type) {
   if (!pending) return;
   task.pendingQuestion = null;
   broadcastTaskEvent(task, 'question', { type: type || 'cancelled', eventId: pending.eventId });
+}
+
+/** 清除并广播授权终态（allowed/rejected/cancelled）；无挂起授权时为幂等 no-op。 */
+function clearTaskPendingApproval(task, type) {
+  const pending = task.pendingApproval;
+  if (!pending) return;
+  task.pendingApproval = null;
+  broadcastTaskEvent(task, 'approval', { type: type || 'cancelled', sessionId: task.sessionId, eventId: pending.eventId });
+}
+
+/** 授权询问的浏览器事件载荷（request / 重放共用同一形状，字段齐全省前端分支）。 */
+function buildApprovalRequestEvent(task, replayed) {
+  const pending = task.pendingApproval || {};
+  const data = {
+    type: 'request',
+    sessionId: task.sessionId,
+    eventId: pending.eventId || '',
+    toolName: pending.toolName || '',
+    callId: pending.callId || '',
+    reason: pending.reason || '',
+  };
+  if (pending.displayReason) data.displayReason = pending.displayReason;
+  if (replayed === true) data.replayed = true;
+  return data;
 }
 
 /** 处理 $events 逻辑流 item 帧：ready / waterfall / cancel（emit 类转发事件与 Q20 无关）。 */
@@ -1885,6 +1918,11 @@ function handleUserEventsItem(task, v) {
         eventId: task.pendingQuestion.eventId,
         questions: task.pendingQuestion.questions,
       });
+    }
+    if (task.pendingApproval && !task.pendingApproval.delivered) {
+      task.pendingApproval.clientId = task.eventsClientId;
+      task.pendingApproval.delivered = true;
+      broadcastTaskEvent(task, 'approval', buildApprovalRequestEvent(task));
     }
     return;
   }
@@ -1922,10 +1960,38 @@ function handleUserEventsItem(task, v) {
     console.log(`[USER QUESTION] session ${task.sessionId} pending (${questions.length} questions)`);
     return;
   }
+  if (v.type === 'waterfall' && v.event === 'approval/request') {
+    // 归属判定与提问完全同构：$events 是 Gateway 全局复用流，帧内 agentId 即询问所属
+    // SessionId。非本会话的授权必须立刻委托回瀑布（next），绝不在本 task 上挂起、
+    // 也不以本会话身份弹窗，否则会把别人的授权请求弹给当前用户。
+    const decision = planApprovalWaterfall(task.sessionId, task.eventsClientId, v);
+    if (decision.action === 'delegate') {
+      if (task.eventsClientId && v.eventId) {
+        settleUserEvent(task, v.eventId, { kind: 'next' });
+      }
+      return;
+    }
+    if (decision.action === 'ignore') return;
+    if (decision.action === 'unavailable') {
+      // 无法呈现的畸形询问：按 dsh 授权语义 fail-closed 结算 unavailable，绝不吞掉请求。
+      settleUserEvent(task, v.eventId, { kind: 'result', value: 'unavailable' });
+      return;
+    }
+    task.pendingApproval = decision.pending;
+    if (task.pendingApproval.delivered && task.pendingApproval.eventId) {
+      broadcastTaskEvent(task, 'approval', buildApprovalRequestEvent(task));
+    }
+    console.log(`[APPROVAL] session ${task.sessionId} pending for tool ${task.pendingApproval.toolName}`);
+    return;
+  }
   if (v.type === 'cancel') {
     if (task.pendingQuestion && task.pendingQuestion.eventId === v.eventId) {
       console.log(`[USER QUESTION] session ${task.sessionId} cancelled by host`);
       clearTaskPendingQuestion(task, 'cancelled');
+    }
+    if (task.pendingApproval && task.pendingApproval.eventId === v.eventId) {
+      console.log(`[APPROVAL] session ${task.sessionId} cancelled by host`);
+      clearTaskPendingApproval(task, 'cancelled');
     }
     return;
   }
@@ -2053,8 +2119,9 @@ async function runChatViaHostRpc(task, { targetCwd, provider, model, promptText,
     if (task.rpc.finished) return;
     task.rpc.finished = true;
     try { ws.close(); } catch {}
-    // 流/回合终结时若仍有挂起提问，向浏览器广播取消以收起作答组件
+    // 流/回合终结时若仍有挂起提问/授权，向浏览器广播取消以收起对应面板
     clearTaskPendingQuestion(task, 'cancelled');
+    clearTaskPendingApproval(task, 'cancelled');
     if (fn) fn();
   };
 
@@ -2237,6 +2304,9 @@ async function attachHostFollowToSession(sessionId, targetCwd) {
     if (prevTask && prevTask !== task && prevTask.pendingQuestion && prevTask.pendingQuestion.eventId) {
       task.pendingQuestion = prevTask.pendingQuestion;
     }
+    if (prevTask && prevTask !== task && prevTask.pendingApproval && prevTask.pendingApproval.eventId) {
+      task.pendingApproval = prevTask.pendingApproval;
+    }
   } catch {}
   activeTasks.set(sessionId, task);
 
@@ -2290,6 +2360,7 @@ async function attachHostFollowToSession(sessionId, targetCwd) {
     task.rpc.finished = true;
     try { ws.close(); } catch {}
     clearTaskPendingQuestion(task, 'cancelled');
+    clearTaskPendingApproval(task, 'cancelled');
     if (fn) fn();
   };
 
@@ -4949,6 +5020,15 @@ function decodeSessionTailWindow(buf) {
   return parts.reverse().join('');
 }
 
+/**
+ * 授权挂起的权威判定：只信本进程在飞 task 的内存真源（task.pendingApproval）。
+ * 宿主转录里的 approval/asked 是审计事件，判定「仍在等待」需要完整配对扫描，
+ * 故此处不做磁盘推断（与提问的转录尾部推断刻意分家，避免误报 waiting）。
+ */
+function sessionPendingApproval(task) {
+  return !!(task && task.status === 'running' && task.pendingApproval);
+}
+
 function sessionPendingQuestion(zstdPath, task) {
   // ① 本进程正在驱动的会话：内存真源独占，绝不触碰磁盘。
   if (task && task.status === 'running') return !!(task.pendingQuestion);
@@ -4999,6 +5079,9 @@ function sessionRowState(input) {
   }
   if (sessionPendingQuestion(opts.zstdPath, task)) {
     return { state: 'waiting', pendingInteraction: 'question' };
+  }
+  if (sessionPendingApproval(task)) {
+    return { state: 'waiting', pendingInteraction: 'approval' };
   }
   return { state: 'running', pendingInteraction: null };
 }
@@ -7917,6 +8000,48 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 授权询问应答端点：非完全权限下越界操作（sandbox 提权）的唯一人工回程。
+  // allow → waterfall result 'allowed-once'（dsh 授权语义：仅本次，绝不落成永久放行）；
+  // reject → 'rejected'（fail-closed）。结算失败保持挂起，浏览器可重试。
+  if (req.method === 'POST' && pathname === '/api/session/approval') {
+    let body;
+    try {
+      body = await parseJsonBody(req);
+    } catch {
+      body = {};
+    }
+    const sessionId = body.sessionId;
+    const eventId = body.eventId;
+    const action = body.action;
+    if (!sessionId || !eventId || (action !== 'allow' && action !== 'reject')) {
+      sendJson(res, 400, { ok: false, error: 'Missing or invalid "sessionId"/"eventId"/"action"' });
+      return;
+    }
+    const task = activeTasks.get(sessionId);
+    const pending = task ? task.pendingApproval : null;
+    if (!task || !pending || pending.eventId !== eventId) {
+      sendJson(res, 200, { ok: false, error: 'no pending approval for this session' });
+      return;
+    }
+    const outcome = action === 'allow' ? 'allowed-once' : 'rejected';
+    const settled = await settleUserEvent(task, eventId, { kind: 'result', value: outcome });
+    if (!settled.ok) {
+      console.warn(`[APPROVAL] settle ${action} failed: ${settled.error}`);
+      sendJson(res, 200, { ok: false, error: settled.error || 'settle failed' });
+      return;
+    }
+    task.pendingApproval = null;
+    broadcastTaskEvent(task, 'approval', {
+      type: action === 'allow' ? 'allowed' : 'rejected',
+      sessionId,
+      eventId,
+      outcome,
+    });
+    console.log(`[APPROVAL] session ${sessionId} ${action}`);
+    sendJson(res, 200, { ok: true, outcome });
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/session/attach') {
     const cwd = searchParams.get('cwd');
     const sessionId = searchParams.get('id');
@@ -7988,6 +8113,7 @@ const server = http.createServer((req, res) => {
       const replayOrdered = liveTask.events.slice().sort((a, b) => (a.seq || 0) - (b.seq || 0));
       for (const ev of replayOrdered) {
         if (ev.event === 'question' && ev.data && ev.data.type === 'request') continue;
+        if (ev.event === 'approval' && ev.data && ev.data.type === 'request') continue;
         sendEvent(ev.event, ev.data, ev.seq);
       };
       // 若当前仍有未结算的提问挂起，重放结束后补发一次 request（单次，不进缓冲），
@@ -7996,6 +8122,9 @@ const server = http.createServer((req, res) => {
         const pendQ = liveTask.pendingQuestion;
         if (pendQ && pendQ.eventId && pendQ.questions && pendQ.questions.length) {
           sendEvent('question', { type: 'request', sessionId, eventId: pendQ.eventId, questions: pendQ.questions, replayed: true });
+        }
+        if (liveTask.pendingApproval && liveTask.pendingApproval.eventId) {
+          sendEvent('approval', buildApprovalRequestEvent(liveTask, true));
         }
       } catch {}
       // 1.5 Marker: replay burst finished. Clients gate live tokens/sec

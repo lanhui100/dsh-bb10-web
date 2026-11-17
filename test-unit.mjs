@@ -16,8 +16,12 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { classifyQuestionFrame } from './lib/ask-ownership.mjs';
+import { classifyApprovalFrame, classifyQuestionFrame, normalizeApprovalRequest } from './lib/ask-ownership.mjs';
+import { planApprovalWaterfall } from './lib/approval-bridge.mjs';
+import { spawn } from 'node:child_process';
+import net from 'node:net';
 import { startMockServer } from './lib/test-mock-host.mjs';
+import { startFakeHost } from './lib/test-fake-host.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -154,6 +158,122 @@ function mockRemoveProbeDir(probeDir) {
   if (!mockServer) throw new Error('mock server not started');
   try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch {}
   if (fs.existsSync(probeDir)) throw new Error(`probe dir residue ${probeDir}`);
+}
+
+
+/** 取一个空闲回环端口（假宿主 E2E 专用）。 */
+function freeLoopPort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const port = srv.address().port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+/** 轮询等待某个 URL 返回任意 HTTP 响应（假宿主 E2E 就绪探测）。 */
+async function waitForUrl(url, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const r = await new Promise((resolve) => {
+      const req = http.get(url, { timeout: 1500 }, (res) => {
+        res.resume();
+        res.on('end', () => resolve({ ok: true, status: res.statusCode }));
+      });
+      req.on('error', () => resolve({ ok: false }));
+      req.on('timeout', () => { req.destroy(); resolve({ ok: false }); });
+    });
+    if (r.ok) return r;
+    await new Promise((r2) => setTimeout(r2, 100));
+  }
+  throw new Error(`timeout waiting for ${url}`);
+}
+
+/** 轮询等待断言成立（假宿主 E2E 专用，避免固定 sleep）。 */
+async function waitUntil(pred, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await pred()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timeout waiting for ${label || 'condition'}`);
+}
+
+/** 解析单个 SSE 块（event + JSON data）。 */
+function parseSseBlock(block) {
+  let event = 'message';
+  let data = '';
+  for (const line of String(block).split('\n')) {
+    if (line.indexOf('event: ') === 0) event = line.slice(7);
+    else if (line.indexOf('data: ') === 0) data += line.slice(6);
+  }
+  if (!data) return null;
+  try { return { event, data: JSON.parse(data) }; } catch { return null; }
+}
+
+/**
+ * 打开一条 SSE 收集器：POST 到 Q20（/api/chat/stream），按块解析事件。
+ * 返回 { events, waitFor(pred, timeoutMs), close(), closed }。
+ */
+function startSseCollector(base, pathname, body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(pathname, base);
+    const payload = JSON.stringify(body);
+    const collector = { events: [], closed: false, waiters: [] };
+    const settleWaiters = (ev) => {
+      for (const w of collector.waiters.slice()) {
+        if (!w.pred(ev)) continue;
+        collector.waiters.splice(collector.waiters.indexOf(w), 1);
+        clearTimeout(w.timer);
+        w.resolve(ev);
+      }
+    };
+    collector.waitFor = (pred, timeoutMs) => new Promise((res, rej) => {
+      const hit = collector.events.find(pred);
+      if (hit) return res(hit);
+      if (collector.closed) return rej(new Error(`SSE closed before event; tail=${JSON.stringify(collector.events.slice(-3))}`));
+      const entry = { pred, resolve: res };
+      entry.timer = setTimeout(() => {
+        const idx = collector.waiters.indexOf(entry);
+        if (idx >= 0) collector.waiters.splice(idx, 1);
+        rej(new Error(`SSE wait timeout ${timeoutMs || 8000}ms; tail=${JSON.stringify(collector.events.slice(-3))}`));
+      }, timeoutMs || 8000);
+      collector.waiters.push(entry);
+    });
+    const req = http.request(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+      timeout: 30000,
+    }, (res) => {
+      let buf = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        buf += chunk;
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const ev = parseSseBlock(block);
+          if (!ev) continue;
+          collector.events.push(ev);
+          settleWaiters(ev);
+        }
+      });
+      res.on('end', () => { collector.closed = true; });
+      res.on('error', () => { collector.closed = true; });
+      resolve(collector);
+    });
+    collector.close = () => { try { req.destroy(); } catch {} };
+    req.on('error', reject);
+    req.on('timeout', () => { try { req.destroy(); } catch {}; reject(new Error('SSE request timeout')); });
+    req.write(payload);
+    req.end();
+  });
 }
 
 class UnitRunner {
@@ -1007,6 +1127,325 @@ async function main() {
       if (classifyQuestionFrame('session-a', { type: 'waterfall', event: 'user-questions/request', agentId: 'session-a', request: {} }) !== 'skip') throw new Error('missing eventId must be skip');
       if (classifyQuestionFrame('session-a', null) !== 'skip') throw new Error('null frame must be skip');
       return { cases: ['foreign(other session)', 'own(same session)', 'defensive empty ids', 'skip unrelated/malformed'] };
+    });
+
+    // 2b3. approval/request 接管决策（非完全权限越界操作授权，对齐 dsh ui-approval）：
+    // claim(own) / delegate(foreign → next) / ignore(畸形帧) / unavailable(缺 toolName fail-closed)。
+    await runner.run('approval/request Bridge Contract (planner + normalize)', async () => {
+      const frame = (over) => Object.assign({
+        type: 'waterfall',
+        event: 'approval/request',
+        eventId: 'evt-a1',
+        agentId: 'session-a',
+        request: {
+          toolName: 'write',
+          callId: 'call-9',
+          reason: 'escalate sandbox to danger-full-access: 需要写入工作区外配置',
+          displayReason: {
+            en: 'Allow this operation with danger-full-access permissions: 需要写入工作区外配置',
+            zh: '允许本次操作使用 danger-full-access 权限：需要写入工作区外配置',
+          },
+        },
+      }, over || {});
+
+      const own = planApprovalWaterfall('session-a', 'client-1', frame(), 1700000000000);
+      if (own.action !== 'claim') throw new Error(`own frame must claim, got ${own.action}`);
+      const pend = own.pending;
+      if (pend.eventId !== 'evt-a1' || pend.clientId !== 'client-1' || pend.toolName !== 'write' || pend.callId !== 'call-9') {
+        throw new Error(`pending identity mismatch: ${JSON.stringify(pend)}`);
+      }
+      if (!pend.delivered || pend.askedAt !== 1700000000000) throw new Error('pending delivered/askedAt mismatch');
+      if (!pend.displayReason || !pend.displayReason.zh || !pend.displayReason.en) {
+        throw new Error('displayReason must normalize to {en,zh}');
+      }
+
+      // $events 未 ready（无 clientId）：仍接管，但 delivered=false，等 ready 帧补投
+      const notReady = planApprovalWaterfall('session-a', '', frame(), 1);
+      if (notReady.action !== 'claim' || notReady.pending.delivered !== false) {
+        throw new Error('unready stream must claim with delivered=false');
+      }
+      // 跨会话 → delegate（必须 settle next，绝不在本会话弹窗）
+      if (planApprovalWaterfall('session-b', 'client-1', frame()).action !== 'delegate') {
+        throw new Error('foreign approval must delegate');
+      }
+      // 无关/畸形帧 → ignore（不接管也不结算）
+      if (planApprovalWaterfall('session-a', 'client-1', { type: 'emit', event: 'approval/request' }).action !== 'ignore') {
+        throw new Error('emit frame must be ignored');
+      }
+      if (planApprovalWaterfall('session-a', 'client-1', frame({ eventId: '' })).action !== 'ignore') {
+        throw new Error('missing eventId must be ignored');
+      }
+      if (planApprovalWaterfall('session-a', 'client-1', null).action !== 'ignore') {
+        throw new Error('null frame must be ignored');
+      }
+      if (classifyApprovalFrame('session-a', frame()) !== 'own') throw new Error('classifyApprovalFrame own');
+      if (classifyApprovalFrame('session-b', frame()) !== 'foreign') throw new Error('classifyApprovalFrame foreign');
+      if (classifyQuestionFrame('session-a', frame()) !== 'skip') throw new Error('question classifier must not claim approval frames');
+
+      // 缺 toolName（无法呈现）→ unavailable：fail-closed，绝不静默吞掉
+      const noTool = planApprovalWaterfall('session-a', 'client-1', frame({ request: { reason: 'x' } }), 1);
+      if (noTool.action !== 'unavailable') throw new Error('missing toolName must settle unavailable');
+
+      // 载荷归一化：非字符串字段一律降级，displayReason 只保留 en/zh
+      const dirty = normalizeApprovalRequest({ toolName: 42, callId: null, reason: {}, displayReason: { en: 'ok', zh: 7, fr: 'non' } });
+      if (dirty.toolName !== '' || dirty.callId !== '' || dirty.reason !== ''
+        || dirty.displayReason.en !== 'ok' || dirty.displayReason.zh !== '') {
+        throw new Error(`dirty payload normalization mismatch: ${JSON.stringify(dirty)}`);
+      }
+      return { cases: ['claim own', 'delivered=false before ready', 'delegate foreign', 'ignore malformed', 'unavailable no toolName', 'normalize dirty payload'] };
+    });
+
+    // 2b4. approval 回填端点边界：400 缺参/非法 action；幽灵会话 200 + ok:false（幂等）。
+    await runner.run('approval Endpoint Boundary Contract (400 + ghost idempotent)', async () => {
+      const mock = await ensureMockServer();
+      const noParam = await httpRequest('/api/session/approval', { method: 'POST', body: {}, base: mock.base });
+      if (noParam.status !== 400) {
+        throw new Error(`Expected 400 without params, got ${noParam.status}`);
+      }
+      const badAction = await httpRequest('/api/session/approval', {
+        method: 'POST',
+        body: { sessionId: 's', eventId: 'e', action: 'always' },
+        base: mock.base,
+      });
+      if (badAction.status !== 400) {
+        throw new Error(`Expected 400 for invalid action, got ${badAction.status}`);
+      }
+      const ghost = await httpRequest('/api/session/approval', {
+        method: 'POST',
+        body: { sessionId: 'ghost-approval-unit-99999', eventId: 'evt-1', action: 'allow' },
+        base: mock.base,
+      });
+      if (ghost.status !== 200 || ghost.body?.ok !== false) {
+        throw new Error(`Expected 200 ok:false for ghost session, got ${ghost.status}: ${JSON.stringify(ghost.body)}`);
+      }
+      if (ghost.body.error !== 'no pending approval for this session') {
+        throw new Error(`Unexpected ghost error: ${ghost.body.error}`);
+      }
+      return { guards: ['400 missing envelope', '400 invalid action', 'ghost ok:false'] };
+    });
+
+    // 2b5. 授权面板客户端契约：纯逻辑（文案/校验/错误中文化）从 index.html 切片直驱，
+    // 接线断言防止 SSE/键盘/端点实现漂移；服务端断言接管与 fail-closed 语义。
+    await runner.run('approval Panel Contract (pure logic + wiring + fail-closed)', async () => {
+      const html = fs.readFileSync(path.join(__dirname, 'static', 'index.html'), 'utf8');
+      const startMark = '/* @Q20-APPROVAL-PURE-START */';
+      const endMark = '/* @Q20-APPROVAL-PURE-END */';
+      const sIdx = html.indexOf(startMark);
+      const eIdx = html.indexOf(endMark);
+      if (sIdx < 0 || eIdx < 0 || eIdx <= sIdx) throw new Error('approval pure-logic markers missing in static/index.html');
+      const logic = new Function(
+        `${html.slice(sIdx + startMark.length, eIdx)}\nreturn { resolveApprovalReason, validateApprovalRequest, approvalErrorText };`,
+      )();
+
+      // 文案优先级：displayReason.zh → .en → reason → dsh 兜底句式
+      if (logic.resolveApprovalReason({ toolName: 'write', displayReason: { en: 'EN', zh: '中文原因' } }) !== '中文原因') {
+        throw new Error('displayReason.zh must win');
+      }
+      if (logic.resolveApprovalReason({ toolName: 'write', displayReason: { en: 'EN only', zh: '  ' } }) !== 'EN only') {
+        throw new Error('displayReason.en must be the fallback');
+      }
+      if (logic.resolveApprovalReason({ toolName: 'write', reason: '  裸原因  ' }) !== '裸原因') {
+        throw new Error('reason must be trimmed fallback');
+      }
+      if (logic.resolveApprovalReason({ toolName: 'write' }) !== '工具 write 请求越权执行') {
+        throw new Error('missing reason must use dsh fallback sentence');
+      }
+
+      // 可呈现性校验：eventId + toolName 必需
+      if (logic.validateApprovalRequest({ eventId: 'e1' }) !== null) throw new Error('missing toolName must be rejected');
+      if (logic.validateApprovalRequest({ toolName: 'write' }) !== null) throw new Error('missing eventId must be rejected');
+      const req = logic.validateApprovalRequest({ sessionId: 's1', eventId: 'e1', toolName: 'write', callId: 'c1', reason: 'r' });
+      if (!req || req.reason !== 'r' || req.callId !== 'c1' || req.sessionId !== 's1') {
+        throw new Error(`valid approval request mismatch: ${JSON.stringify(req)}`);
+      }
+
+      // 错误中文化：裸英文绝不直接上屏
+      if (logic.approvalErrorText('no pending approval for this session').indexOf('已失效') < 0) {
+        throw new Error('stale approval error must be localized');
+      }
+      if (logic.approvalErrorText('settle failed').indexOf('重试') < 0) {
+        throw new Error('settle failure must ask for retry');
+      }
+
+      const needles = [
+        '/api/session/approval',
+        'handleApprovalEvent',
+        "else if (currentEvent === 'approval')",
+        "else if (eventType === 'approval')",
+        'approvalState.visible',
+        "submitApproval('allow')",
+        "submitApproval('reject')",
+        '允许一次 [Enter]',
+        '拒绝 [X]',
+        '另一会话有待审批操作',
+      ];
+      for (const n of needles) {
+        if (html.indexOf(n) < 0) throw new Error(`approval wiring missing in index.html: ${n}`);
+      }
+
+      const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+      const serverNeedles = [
+        "v.event === 'approval/request'",
+        'planApprovalWaterfall',
+        "value: 'unavailable'",
+        "'allowed-once'",
+        "'rejected'",
+        "pendingInteraction: 'approval'",
+        "ev.event === 'approval' && ev.data && ev.data.type === 'request'",
+        'clearTaskPendingApproval',
+        'prevTask.pendingApproval',
+      ];
+      for (const n of serverNeedles) {
+        if (serverSrc.indexOf(n) < 0) throw new Error(`approval server bridge missing: ${n}`);
+      }
+      if (serverSrc.indexOf('allowed-always') >= 0) throw new Error('approval must never grant a permanent allow');
+
+      return {
+        pureLogic: ['displayReason zh/en priority', 'reason trim fallback', 'dsh fallback sentence', 'eventId+toolName required', 'zh stale/settle error'],
+        wiring: ['SSE attach+chat', 'keyboard Enter/X', 'POST /api/session/approval', 'cross-session banner'],
+        server: ['planner claim/delegate/unavailable', 'allowed-once only', 'pendingInteraction approval', 'replay filter', 'carry-over'],
+      };
+    });
+
+    // 2b6. approval 全链路行为测试（假宿主 mux）：waterfall → SSE → POST 回填 → $events/result。
+    // 覆盖 allow（allowed-once）/ reject（rejected fail-closed）/ foreign（next 委托，绝不弹窗）三态。
+    await runner.run('approval Waterfall End-to-End (fake host mux → SSE → $events/result)', async () => {
+      const fake = await startFakeHost();
+      if (!fake) return { skipped: 'ws module unavailable (DSH checkout missing)' };
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'q20-fakehost-'));
+      const workspaceRoot = path.join(home, 'ws');
+      fs.mkdirSync(workspaceRoot, { recursive: true });
+      const port = await freeLoopPort();
+      const base = `http://127.0.0.1:${port}`;
+      const child = spawn(process.execPath, ['server.mjs'], {
+        cwd: __dirname,
+        env: {
+          ...process.env,
+          PORT: String(port),
+          HOST: '127.0.0.1',
+          DSH_HOME: path.join(home, 'dsh-home'),
+          DSH_WEB_URL: fake.url,
+          SKIP_Q20_AUTH: '1',
+          Q20_MOCK_HOST: '',
+        },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let logs = '';
+      if (child.stderr) {
+        child.stderr.on('data', (d) => {
+          logs += d.toString();
+          if (logs.length > 20000) logs = logs.slice(-20000);
+        });
+      }
+      const collectors = [];
+      const approvalFrame = (sessionId, eventId) => ({
+        type: 'waterfall',
+        event: 'approval/request',
+        eventId,
+        agentId: sessionId,
+        request: {
+          toolName: 'write',
+          callId: `call-${eventId}`,
+          reason: 'escalate sandbox to danger-full-access: 写入工作区外文件',
+          displayReason: {
+            en: 'Allow this operation with danger-full-access permissions: 写入工作区外文件',
+            zh: '允许本次操作使用 danger-full-access 权限：写入工作区外文件',
+          },
+        },
+      });
+      try {
+        await waitForUrl(base + '/healthz', 25000);
+
+        // 场景一：允许一次
+        fake.armApproval(approvalFrame('fake-session-1', 'evt-approve-1'));
+        const s1 = await startSseCollector(base, '/api/chat/stream', {
+          cwd: workspaceRoot, provider: 'fake-provider', model: 'fake-model',
+          prompt: '把配置写到工作区外', sessionId: 'fake-session-1',
+        });
+        collectors.push(s1);
+        const req1 = await s1.waitFor((ev) => ev.event === 'approval' && ev.data && ev.data.type === 'request', 12000);
+        if (req1.data.sessionId !== 'fake-session-1' || req1.data.eventId !== 'evt-approve-1') {
+          throw new Error(`approval request identity mismatch: ${JSON.stringify(req1.data)}`);
+        }
+        if (req1.data.toolName !== 'write' || !req1.data.displayReason || !req1.data.displayReason.zh) {
+          throw new Error(`approval request payload mismatch: ${JSON.stringify(req1.data)}`);
+        }
+        const allowRes = await httpRequest('/api/session/approval', {
+          method: 'POST',
+          body: { sessionId: 'fake-session-1', eventId: 'evt-approve-1', action: 'allow' },
+          base,
+        });
+        if (!allowRes.body || allowRes.body.ok !== true || allowRes.body.outcome !== 'allowed-once') {
+          throw new Error(`allow decision failed: ${allowRes.status} ${JSON.stringify(allowRes.body)}`);
+        }
+        await waitUntil(
+          () => fake.state.results.some((r) => r && r.eventId === 'evt-approve-1' && r.outcome && r.outcome.value === 'allowed-once'),
+          6000,
+          'host $events/result allowed-once',
+        );
+        await s1.waitFor((ev) => ev.event === 'approval' && ev.data && ev.data.type === 'allowed', 6000);
+        fake.finishTurn();
+        await s1.waitFor((ev) => ev.event === 'done', 10000);
+
+        // 场景二：拒绝（fail-closed，禁止永久放行）
+        fake.armApproval(approvalFrame('fake-session-2', 'evt-reject-1'));
+        const s2 = await startSseCollector(base, '/api/chat/stream', {
+          cwd: workspaceRoot, provider: 'fake-provider', model: 'fake-model',
+          prompt: '再试一次越界写入', sessionId: 'fake-session-2',
+        });
+        collectors.push(s2);
+        const req2 = await s2.waitFor((ev) => ev.event === 'approval' && ev.data && ev.data.type === 'request', 12000);
+        if (req2.data.eventId !== 'evt-reject-1') throw new Error(`reject scenario eventId mismatch: ${req2.data.eventId}`);
+        const rejectRes = await httpRequest('/api/session/approval', {
+          method: 'POST',
+          body: { sessionId: 'fake-session-2', eventId: 'evt-reject-1', action: 'reject' },
+          base,
+        });
+        if (!rejectRes.body || rejectRes.body.ok !== true || rejectRes.body.outcome !== 'rejected') {
+          throw new Error(`reject decision failed: ${rejectRes.status} ${JSON.stringify(rejectRes.body)}`);
+        }
+        await waitUntil(
+          () => fake.state.results.some((r) => r && r.eventId === 'evt-reject-1' && r.outcome && r.outcome.value === 'rejected'),
+          6000,
+          'host $events/result rejected',
+        );
+        await s2.waitFor((ev) => ev.event === 'approval' && ev.data && ev.data.type === 'rejected', 6000);
+        fake.finishTurn();
+        await s2.waitFor((ev) => ev.event === 'done', 10000);
+
+        // 场景三：跨会话授权 → 委托 next，绝不在本会话弹窗
+        fake.armApproval(approvalFrame('other-session', 'evt-foreign-1'));
+        const s3 = await startSseCollector(base, '/api/chat/stream', {
+          cwd: workspaceRoot, provider: 'fake-provider', model: 'fake-model',
+          prompt: '无关会话的授权不应弹窗', sessionId: 'fake-session-3',
+        });
+        collectors.push(s3);
+        await waitUntil(
+          () => fake.state.results.some((r) => r && r.eventId === 'evt-foreign-1' && r.outcome && r.outcome.kind === 'next'),
+          6000,
+          'foreign approval delegated with next',
+        );
+        if (s3.events.some((ev) => ev.event === 'approval')) {
+          throw new Error('foreign approval must never surface as SSE approval event');
+        }
+        fake.finishTurn();
+        await s3.waitFor((ev) => ev.event === 'done', 10000);
+
+        return {
+          allow: 'allowed-once roundtrip',
+          reject: 'rejected fail-closed roundtrip',
+          foreign: 'next delegation without UI',
+        };
+      } catch (err) {
+        throw new Error(`${err.message}\n[fake-host stderr]\n${logs.slice(-4000)}`);
+      } finally {
+        for (const c of collectors) c.close();
+        try { child.kill('SIGTERM'); } catch {}
+        await new Promise((r) => setTimeout(r, 150));
+        try { child.kill('SIGKILL'); } catch {}
+        await fake.stop();
+        try { fs.rmSync(home, { recursive: true, force: true }); } catch {}
+      }
     });
 
     // 2c. 中文工具标题映射口径（对齐 dsh web tool.title.* + keyed toolview 标题）
